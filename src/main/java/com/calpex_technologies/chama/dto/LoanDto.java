@@ -33,12 +33,24 @@ public class LoanDto {
     private BigDecimal totalPaid;
     private BigDecimal totalPenalties;
     
+    // Processing fee
+    private BigDecimal processingFee;
+    private BigDecimal processingFeePaid;
+    private BigDecimal netDisbursementAmount; // Amount actually given to member
+    private String processingFeeDeductionType; // UPFRONT, ON_REPAYMENT
+    
     private String status;
     
-    // Approval workflow
+    // Guarantor approval workflow (Phase 1 - parallel)
+    private Integer requiredGuarantors;
+    private Integer guarantorsApprovedCount;
+    private List<String> pendingGuarantorNames; // Names of guarantors who haven't approved yet
+    
+    // Approver approval workflow (Phase 2 - sequential)
     private Integer currentApprovalLevel;
     private Integer requiredApprovalLevels;
-    private String pendingApprovalRole; // Role name of who should approve next
+    private String pendingApprovalRole; // Name of who should approve next (or "Guarantors" during phase 1)
+    private String pendingApprovalType; // "GUARANTOR" or "APPROVER"
     private List<LoanApprovalDto> approvalHistory;
     
     // Guarantors
@@ -72,8 +84,9 @@ public class LoanDto {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class LoanApprovalDto {
-        private Integer level;
-        private String levelName;
+        private String approvalType; // GUARANTOR or APPROVER
+        private Integer level; // null for guarantors
+        private String levelName; // "Guarantor" or "Level 1 Approval", etc.
         private String approverName;
         private String approverRole;
         private String action; // APPROVED, REJECTED, RETURNED

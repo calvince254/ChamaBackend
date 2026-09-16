@@ -18,4 +18,8 @@ public class TransactionDto {
     private String description;
     private BigDecimal amount;
     private String direction;
+    private String memberName;
+    private Long memberId;
+    private Long referenceId;
+    private String referenceType;
 }

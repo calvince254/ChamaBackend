@@ -2,6 +2,7 @@ package com.calpex_technologies.chama.repository;
 
 import com.calpex_technologies.chama.entity.MerryGoRoundContribution;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
@@ -38,4 +39,8 @@ public interface MerryGoRoundContributionRepository extends JpaRepository<MerryG
     
     @Query("SELECT COUNT(c) FROM MerryGoRoundContribution c WHERE c.round.id = :roundId")
     int countTotalForRound(Long roundId);
+    
+    @Modifying
+    @Query("DELETE FROM MerryGoRoundContribution c WHERE c.member.id = :memberId")
+    void deleteByMemberId(@org.springframework.data.repository.query.Param("memberId") Long memberId);
 }

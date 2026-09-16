@@ -2,6 +2,7 @@ package com.calpex_technologies.chama.security;
 
 import com.calpex_technologies.chama.entity.Member;
 import com.calpex_technologies.chama.repository.MemberRepository;
+import com.calpex_technologies.chama.service.TokenBlacklistService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -18,7 +19,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -27,6 +27,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
     private final MemberRepository memberRepository;
+    private final TokenBlacklistService tokenBlacklistService;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -42,6 +43,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         final String jwt = authHeader.substring(7);
         
         try {
+            // Check if token is blacklisted (logged out)
+            if (tokenBlacklistService.isTokenBlacklisted(jwt)) {
+                log.debug("Token is blacklisted, rejecting request");
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.setContentType("application/json");
+                response.getWriter().write("{\"error\": \"Token has been invalidated. Please login again.\"}");
+                return;
+            }
+            
             if (jwtUtil.validateToken(jwt)) {
                 String email = jwtUtil.extractEmail(jwt);
                 Long memberId = jwtUtil.extractMemberId(jwt);
@@ -54,28 +64,28 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     email, memberId, isSuperAdmin, permissions);
                 
                 if (SecurityContextHolder.getContext().getAuthentication() == null) {
-                    // Build authorities from permissions
+                    // Build authorities from JWT token permissions
                     List<SimpleGrantedAuthority> authorities = new ArrayList<>();
                     
-                    // Add base role authority and permissions from token
                     if (Boolean.TRUE.equals(isSuperAdmin)) {
-                        authorities.add(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"));
                         // Super admin ALWAYS gets FULL_ACCESS
+                        authorities.add(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN"));
                         authorities.add(new SimpleGrantedAuthority("FULL_ACCESS"));
                         log.debug("Super admin detected - adding FULL_ACCESS authority");
                     } else {
                         authorities.add(new SimpleGrantedAuthority("ROLE_USER"));
-                    }
-                    
-                    // Add each permission from the token as an authority
-                    if (permissions != null && !permissions.isEmpty()) {
-                        for (String perm : permissions) {
-                            authorities.add(new SimpleGrantedAuthority(perm));
+                        
+                        // Add permissions from JWT token as authorities
+                        // These permissions were set at login time based on the user's role
+                        if (permissions != null && !permissions.isEmpty()) {
+                            for (String perm : permissions) {
+                                authorities.add(new SimpleGrantedAuthority(perm));
+                            }
+                            log.debug("Added {} permission authorities from JWT token", permissions.size());
                         }
-                        log.debug("Added {} permission authorities from token", permissions.size());
                     }
                     
-                    // Try to get member from DB, but don't fail if not found (super admin case)
+                    // Get member from DB for name (optional, for display purposes)
                     Member member = memberRepository.findByIdWithRole(memberId).orElse(null);
                     String memberName = member != null ? member.getName() : email;
                     
@@ -97,9 +107,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authToken);
                     
-//                    log.debug("Authentication set with {} authorities: {}",
-//                        authorities.size(),
-//                        authorities.stream().map(a -> a.getAuthority()).collect(Collectors.joining(", ")));
+                    log.debug("Authentication set with {} authorities", authorities.size());
                 }
             }
         } catch (Exception e) {

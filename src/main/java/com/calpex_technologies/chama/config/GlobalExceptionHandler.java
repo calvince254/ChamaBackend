@@ -1,6 +1,7 @@
 package com.calpex_technologies.chama.config;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -17,6 +18,28 @@ import java.util.Map;
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        log.error("Data integrity violation: {}", ex.getMessage());
+        String message = "Database constraint violation";
+        
+        // Check for common constraint violations
+        String rootCause = ex.getRootCause() != null ? ex.getRootCause().getMessage() : ex.getMessage();
+        if (rootCause != null) {
+            if (rootCause.contains("Duplicate entry") && rootCause.contains("email")) {
+                message = "A member with this email address already exists";
+            } else if (rootCause.contains("Duplicate entry") && rootCause.contains("phone")) {
+                message = "A member with this phone number already exists";
+            } else if (rootCause.contains("Duplicate entry") && rootCause.contains("member_no")) {
+                message = "A member with this member number already exists";
+            } else if (rootCause.contains("Duplicate entry")) {
+                message = "This record already exists (duplicate entry)";
+            }
+        }
+        
+        return buildErrorResponse(HttpStatus.CONFLICT, message);
+    }
 
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<Map<String, Object>> handleRuntimeException(RuntimeException ex) {

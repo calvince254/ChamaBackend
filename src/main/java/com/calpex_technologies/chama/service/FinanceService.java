@@ -5,6 +5,9 @@ import com.calpex_technologies.chama.dto.TransactionDto;
 import com.calpex_technologies.chama.entity.Transaction;
 import com.calpex_technologies.chama.repository.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,6 +55,48 @@ public class FinanceService {
                 .collect(Collectors.toList());
     }
 
+    public Page<TransactionDto> getTransactionsPaginated(Long tenantId, int page, int size, String type, String direction, Long memberId) {
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Transaction> transactionPage;
+        
+        boolean hasType = type != null && !type.isEmpty();
+        boolean hasDirection = direction != null && !direction.isEmpty();
+        boolean hasMember = memberId != null;
+        
+        // Build query based on filters - using specification pattern would be cleaner but this works
+        if (hasMember) {
+            if (hasType && hasDirection) {
+                Transaction.TransactionType txType = Transaction.TransactionType.valueOf(type);
+                Transaction.TransactionDirection txDirection = Transaction.TransactionDirection.valueOf(direction);
+                transactionPage = transactionRepository.findByTenantIdAndMemberIdAndTypeAndDirection(tenantId, memberId, txType, txDirection, pageable);
+            } else if (hasType) {
+                Transaction.TransactionType txType = Transaction.TransactionType.valueOf(type);
+                transactionPage = transactionRepository.findByTenantIdAndMemberIdAndType(tenantId, memberId, txType, pageable);
+            } else if (hasDirection) {
+                Transaction.TransactionDirection txDirection = Transaction.TransactionDirection.valueOf(direction);
+                transactionPage = transactionRepository.findByTenantIdAndMemberIdAndDirection(tenantId, memberId, txDirection, pageable);
+            } else {
+                transactionPage = transactionRepository.findByTenantIdAndMemberIdOrderByDateDescIdDesc(tenantId, memberId, pageable);
+            }
+        } else {
+            if (hasType && hasDirection) {
+                Transaction.TransactionType txType = Transaction.TransactionType.valueOf(type);
+                Transaction.TransactionDirection txDirection = Transaction.TransactionDirection.valueOf(direction);
+                transactionPage = transactionRepository.findByTenantIdAndTypeAndDirection(tenantId, txType, txDirection, pageable);
+            } else if (hasType) {
+                Transaction.TransactionType txType = Transaction.TransactionType.valueOf(type);
+                transactionPage = transactionRepository.findByTenantIdAndType(tenantId, txType, pageable);
+            } else if (hasDirection) {
+                Transaction.TransactionDirection txDirection = Transaction.TransactionDirection.valueOf(direction);
+                transactionPage = transactionRepository.findByTenantIdAndDirection(tenantId, txDirection, pageable);
+            } else {
+                transactionPage = transactionRepository.findByTenantIdOrderByDateDescIdDesc(tenantId, pageable);
+            }
+        }
+        
+        return transactionPage.map(this::toDto);
+    }
+
     public List<TransactionDto> getTransactionsByDateRange(Long tenantId, LocalDate startDate, LocalDate endDate) {
         return transactionRepository.findByTenantIdAndDateBetween(tenantId, startDate, endDate).stream()
                 .map(this::toDto)
@@ -66,6 +111,8 @@ public class FinanceService {
                 .description(transaction.getDescription())
                 .amount(transaction.getAmount())
                 .direction(transaction.getDirection().name())
+                .memberName(transaction.getMember() != null ? transaction.getMember().getName() : null)
+                .memberId(transaction.getMember() != null ? transaction.getMember().getId() : null)
                 .build();
     }
 }

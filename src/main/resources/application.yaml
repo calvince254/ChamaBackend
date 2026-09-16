@@ -10,7 +10,7 @@ spring:
 
   # MySQL Database Configuration
   datasource:
-    url: jdbc:mysql://localhost:3306/chamadb?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3306/chama_db?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:root}
@@ -29,6 +29,27 @@ spring:
     serialization:
       write-dates-as-timestamps: false
     date-format: yyyy-MM-dd'T'HH:mm:ss.SSSZ
+
+  # Email Configuration (Gmail example - update with actual SMTP credentials)
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:your-email@gmail.com}
+    password: ${MAIL_PASSWORD:your-app-password}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+# Application settings
+app:
+  name: Chama Manager
 
 server:
   port: 3324
@@ -62,7 +83,7 @@ spring:
       on-profile: prod
 
   datasource:
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:chamadb}?useSSL=true&serverTimezone=UTC
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:chama_db}?useSSL=true&serverTimezone=UTC
     username: ${DB_USERNAME:chama}
     password: ${DB_PASSWORD:chama123}
 

@@ -55,4 +55,8 @@ public interface PayoutMemberRepository extends JpaRepository<PayoutMember, Long
     
     @Modifying
     void deleteByMember(Member member);
+    
+    @Modifying
+    @Query("DELETE FROM PayoutMember pm WHERE pm.member.id = :memberId")
+    void deleteByMemberId(@Param("memberId") Long memberId);
 }

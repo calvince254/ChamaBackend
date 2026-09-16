@@ -27,6 +27,7 @@ public class ShareCalculationDto {
     private BigDecimal poolLoanInterest;       // Loan interest/profits
     private BigDecimal poolInvestmentReturns;  // Investment gains
     private BigDecimal poolPenalties;          // Penalties collected
+    private BigDecimal poolProcessingFees;     // Loan processing fees collected
     private BigDecimal totalPaidOut;           // Total payouts already distributed
     private BigDecimal totalPoolValue;         // Sum of all pool sources minus payouts
     

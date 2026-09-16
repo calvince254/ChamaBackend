@@ -3,6 +3,8 @@ package com.calpex_technologies.chama.repository;
 import com.calpex_technologies.chama.entity.Contribution;
 import com.calpex_technologies.chama.entity.Member;
 import com.calpex_technologies.chama.entity.Tenant;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -54,4 +56,53 @@ public interface ContributionRepository extends JpaRepository<Contribution, Long
     @Query("SELECT c FROM Contribution c WHERE c.tenant.id = :tenantId AND c.contributionType.id = :contributionTypeId AND c.status = 'OVERDUE'")
     List<Contribution> findOverdueByTenantIdAndContributionTypeId(
             @Param("tenantId") Long tenantId, @Param("contributionTypeId") Long contributionTypeId);
+    
+    // Dashboard analytics queries
+    @Query("SELECT COALESCE(SUM(c.amountPaid), 0) FROM Contribution c WHERE c.tenant.id = :tenantId AND c.amountPaid IS NOT NULL")
+    BigDecimal sumPaidAmountByTenantId(@Param("tenantId") Long tenantId);
+    
+    @Query("SELECT COALESCE(SUM(c.amountPaid), 0) FROM Contribution c WHERE c.member.id = :memberId AND c.amountPaid IS NOT NULL")
+    BigDecimal sumPaidAmountByMemberId(@Param("memberId") Long memberId);
+    
+    @Query("SELECT COALESCE(SUM(c.amountPaid), 0) FROM Contribution c WHERE c.tenant.id = :tenantId " +
+           "AND c.paidOn BETWEEN :startDate AND :endDate AND c.amountPaid IS NOT NULL")
+    BigDecimal sumPaidAmountByTenantIdAndDateRange(
+            @Param("tenantId") Long tenantId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate);
+    
+    @Query("SELECT c FROM Contribution c WHERE c.tenant.id = :tenantId AND c.amountPaid IS NOT NULL " +
+           "AND c.amountPaid > 0 ORDER BY c.paidOn DESC, c.createdAt DESC")
+    List<Contribution> findRecentByTenantId(@Param("tenantId") Long tenantId, org.springframework.data.domain.Pageable pageable);
+    
+    default List<Contribution> findRecentByTenantId(Long tenantId, int limit) {
+        return findRecentByTenantId(tenantId, org.springframework.data.domain.PageRequest.of(0, limit));
+    }
+    
+    // Paginated queries
+    Page<Contribution> findByTenantIdOrderByMonthDesc(Long tenantId, Pageable pageable);
+    
+    Page<Contribution> findByTenantIdAndContributionTypeIdAndMonth(
+            Long tenantId, Long contributionTypeId, YearMonth month, Pageable pageable);
+    
+    @Query("SELECT c FROM Contribution c WHERE c.tenant.id = :tenantId AND c.month = :month ORDER BY c.member.name ASC")
+    Page<Contribution> findByTenantIdAndMonth(@Param("tenantId") Long tenantId, 
+                                               @Param("month") YearMonth month, 
+                                               Pageable pageable);
+    
+    @Query("SELECT c FROM Contribution c WHERE c.tenant.id = :tenantId AND c.contributionType.id = :contributionTypeId " +
+           "AND c.month = :month AND c.status = :status ORDER BY c.member.name ASC")
+    Page<Contribution> findByTenantIdAndContributionTypeIdAndMonthAndStatus(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("month") YearMonth month,
+            @Param("status") Contribution.ContributionStatus status,
+            Pageable pageable);
+    
+    @Modifying
+    @Query("DELETE FROM Contribution c WHERE c.member.id = :memberId")
+    void deleteByMemberId(@Param("memberId") Long memberId);
+    
+    // For welfare payment from contribution fund
+    List<Contribution> findByMemberIdAndContributionTypeIdAndTenantId(Long memberId, Long contributionTypeId, Long tenantId);
 }

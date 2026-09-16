@@ -2,9 +2,12 @@ package com.calpex_technologies.chama.repository;
 
 import com.calpex_technologies.chama.entity.Member;
 import com.calpex_technologies.chama.entity.Tenant;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -26,6 +29,9 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.id = :id")
     Optional<Member> findByIdWithRole(Long id);
     
+    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role r LEFT JOIN FETCH r.rolePermissions WHERE m.id = :id")
+    Optional<Member> findByIdWithRoleAndPermissions(Long id);
+    
     @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId")
     List<Member> findByTenantIdWithRole(Long tenantId);
     
@@ -41,4 +47,29 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
 
     @Modifying
     void deleteByTenant(Tenant tenant);
+    
+    // Paginated queries
+    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId")
+    Page<Member> findByTenantIdWithRole(@Param("tenantId") Long tenantId, Pageable pageable);
+    
+    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND " +
+           "(LOWER(m.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
+           "LOWER(m.memberNo) LIKE LOWER(CONCAT('%', :search, '%')))")
+    Page<Member> findByTenantIdWithRoleAndSearch(@Param("tenantId") Long tenantId, 
+                                                  @Param("search") String search, 
+                                                  Pageable pageable);
+    
+    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND m.status = :status")
+    Page<Member> findByTenantIdWithRoleAndStatus(@Param("tenantId") Long tenantId, 
+                                                  @Param("status") Member.MemberStatus status, 
+                                                  Pageable pageable);
+    
+    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND " +
+           "m.status = :status AND " +
+           "(LOWER(m.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
+           "LOWER(m.memberNo) LIKE LOWER(CONCAT('%', :search, '%')))")
+    Page<Member> findByTenantIdWithRoleStatusAndSearch(@Param("tenantId") Long tenantId, 
+                                                        @Param("status") Member.MemberStatus status,
+                                                        @Param("search") String search, 
+                                                        Pageable pageable);
 }

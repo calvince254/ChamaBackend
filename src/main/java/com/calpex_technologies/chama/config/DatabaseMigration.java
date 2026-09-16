@@ -1,27 +1,32 @@
 package com.calpex_technologies.chama.config;
 
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
  * Handles database schema migrations that Hibernate's ddl-auto can't do.
  * For example, converting ENUM columns to VARCHAR.
+ * Runs BEFORE DataInitializer (Order 1 vs Order 2).
  */
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class DatabaseMigration {
+@Order(1)
+public class DatabaseMigration implements ApplicationRunner {
 
     private final JdbcTemplate jdbcTemplate;
 
-    @PostConstruct
-    public void migrate() {
+    @Override
+    public void run(ApplicationArguments args) {
         convertFinesStatusToVarchar();
         expandInvestmentCategoryColumn();
         convertTransactionsTypeToVarchar();
+        setDefaultMustChangePassword();
     }
 
     /**
@@ -113,6 +118,43 @@ public class DatabaseMigration {
             }
         } catch (Exception e) {
             log.warn("Could not migrate transactions.type column: {}. This may be expected on first run.", e.getMessage());
+        }
+    }
+
+    /**
+     * Set default value for must_change_password column for existing members.
+     * This is needed because the column was added as nullable and existing records have NULL.
+     */
+    private void setDefaultMustChangePassword() {
+        try {
+            // Check if the members table exists
+            String checkTable = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'members'";
+            Integer tableExists = jdbcTemplate.queryForObject(checkTable, Integer.class);
+            
+            if (tableExists == null || tableExists == 0) {
+                log.info("Members table doesn't exist yet, skipping migration");
+                return;
+            }
+
+            // Check if the column exists
+            String checkColumn = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'members' AND column_name = 'must_change_password'";
+            Integer columnExists = jdbcTemplate.queryForObject(checkColumn, Integer.class);
+            
+            if (columnExists == null || columnExists == 0) {
+                log.info("must_change_password column doesn't exist yet, skipping migration");
+                return;
+            }
+
+            // Update NULL values to false
+            log.info("Setting default value for must_change_password on existing members...");
+            int updated = jdbcTemplate.update("UPDATE members SET must_change_password = 0 WHERE must_change_password IS NULL");
+            if (updated > 0) {
+                log.info("Updated {} members with default must_change_password = false", updated);
+            } else {
+                log.debug("No members needed must_change_password update");
+            }
+        } catch (Exception e) {
+            log.warn("Could not update must_change_password column: {}. This may be expected on first run.", e.getMessage());
         }
     }
 }

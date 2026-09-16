@@ -22,4 +22,17 @@ public class CreateMemberRequest {
     private String password;
     
     private Long roleId;
+    
+    /**
+     * Password generation mode:
+     * - "default" = use 12345678, no email sent
+     * - "random" = generate random password, send email
+     * - null/empty = use provided password field (backward compatible)
+     */
+    private String passwordMode;
+    
+    /**
+     * Whether to send welcome email (only applies when passwordMode is "random")
+     */
+    private Boolean sendEmail;
 }

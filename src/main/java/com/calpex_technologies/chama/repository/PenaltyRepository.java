@@ -1,7 +1,10 @@
 package com.calpex_technologies.chama.repository;
 
 import com.calpex_technologies.chama.entity.Penalty;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -46,4 +49,21 @@ public interface PenaltyRepository extends JpaRepository<Penalty, Long> {
     
     @Query("SELECT COALESCE(SUM(p.paidAmount), 0) FROM Penalty p WHERE p.member.id = :memberId")
     BigDecimal getTotalPaidPenaltiesForMember(@Param("memberId") Long memberId);
+    
+    // Paginated queries
+    Page<Penalty> findByTenantIdOrderByImposedAtDesc(Long tenantId, Pageable pageable);
+    
+    @Query("SELECT p FROM Penalty p WHERE p.tenant.id = :tenantId AND p.status = :status ORDER BY p.imposedAt DESC")
+    Page<Penalty> findByTenantIdAndStatus(@Param("tenantId") Long tenantId, 
+                                           @Param("status") Penalty.PenaltyStatus status, 
+                                           Pageable pageable);
+    
+    @Query("SELECT p FROM Penalty p WHERE p.tenant.id = :tenantId AND p.member.id = :memberId ORDER BY p.imposedAt DESC")
+    Page<Penalty> findByTenantIdAndMemberId(@Param("tenantId") Long tenantId, 
+                                             @Param("memberId") Long memberId, 
+                                             Pageable pageable);
+    
+    @Modifying
+    @Query("DELETE FROM Penalty p WHERE p.member.id = :memberId")
+    void deleteByMemberId(@Param("memberId") Long memberId);
 }

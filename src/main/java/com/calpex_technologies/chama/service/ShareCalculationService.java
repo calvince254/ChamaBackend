@@ -31,6 +31,7 @@ public class ShareCalculationService {
     private final LoanRepository loanRepository;
     private final InvestmentRepository investmentRepository;
     private final PayoutMemberRepository payoutMemberRepository;
+    private final TransactionRepository transactionRepository;
 
     // ==================== SETTINGS MANAGEMENT ====================
 
@@ -44,6 +45,7 @@ public class ShareCalculationService {
                     .includeLoanInterest(false)
                     .includeInvestmentReturns(false)
                     .includePenalties(false)
+                    .includeProcessingFees(false)
                     .build();
         }
         return toDto(settings);
@@ -66,6 +68,7 @@ public class ShareCalculationService {
         settings.setIncludeLoanInterest(dto.getIncludeLoanInterest() != null ? dto.getIncludeLoanInterest() : false);
         settings.setIncludeInvestmentReturns(dto.getIncludeInvestmentReturns() != null ? dto.getIncludeInvestmentReturns() : false);
         settings.setIncludePenalties(dto.getIncludePenalties() != null ? dto.getIncludePenalties() : false);
+        settings.setIncludeProcessingFees(dto.getIncludeProcessingFees() != null ? dto.getIncludeProcessingFees() : false);
 
         settings = shareSettingsRepository.save(settings);
         return toDto(settings);
@@ -115,6 +118,7 @@ public class ShareCalculationService {
         BigDecimal poolLoanInterest = BigDecimal.ZERO;
         BigDecimal poolInvestmentReturns = BigDecimal.ZERO;
         BigDecimal poolPenalties = BigDecimal.ZERO;
+        BigDecimal poolProcessingFees = BigDecimal.ZERO;
 
         // Pool contributions (may be different from share calculation types)
         Set<Long> poolTypeIds = settings.getPoolContributionTypeIds();
@@ -148,11 +152,17 @@ public class ShareCalculationService {
             if (poolPenalties == null) poolPenalties = BigDecimal.ZERO;
         }
 
+        // Processing fees collected (from PROCESSING_FEE transactions)
+        if (Boolean.TRUE.equals(settings.getIncludeProcessingFees())) {
+            poolProcessingFees = calculateTotalProcessingFeesCollected(tenantId);
+        }
+
         BigDecimal totalPoolValue = poolContributions
                 .add(poolFines)
                 .add(poolLoanInterest)
                 .add(poolInvestmentReturns)
-                .add(poolPenalties);
+                .add(poolPenalties)
+                .add(poolProcessingFees);
 
         // ==================== STEP 2.5: Subtract Completed Payouts ====================
         // Get total paid out to members (reduces the pool)
@@ -169,10 +179,8 @@ public class ShareCalculationService {
         }
 
         // Reduce total pool by amount already paid out
+        // Allow negative values to show when more has been paid out than available
         totalPoolValue = totalPoolValue.subtract(totalPaidOut);
-        if (totalPoolValue.compareTo(BigDecimal.ZERO) < 0) {
-            totalPoolValue = BigDecimal.ZERO;
-        }
 
         // ==================== STEP 3: Calculate Member Shares ====================
         // First, adjust contributions by subtracting individual payouts
@@ -220,6 +228,7 @@ public class ShareCalculationService {
             }
 
             // Calculate member value based on percentage of remaining pool
+            // Can be negative if pool is negative (more paid out than available)
             BigDecimal memberValue = BigDecimal.ZERO;
             if (sharePercentage.compareTo(BigDecimal.ZERO) > 0) {
                 memberValue = totalPoolValue
@@ -253,6 +262,7 @@ public class ShareCalculationService {
                 .poolLoanInterest(poolLoanInterest)
                 .poolInvestmentReturns(poolInvestmentReturns)
                 .poolPenalties(poolPenalties)
+                .poolProcessingFees(poolProcessingFees)
                 .totalPaidOut(totalPaidOut)
                 .totalPoolValue(totalPoolValue)
                 .memberShares(memberShares)
@@ -282,11 +292,31 @@ public class ShareCalculationService {
     }
 
     /**
-     * Calculate total loan interest collected from repayments
-     * Interest = Total Paid - Principal (for cleared loans)
-     * For active loans, calculate proportional interest paid
+     * Calculate total loan interest collected from LOAN_INTEREST transactions
+     * This uses the actual recorded interest transactions for accuracy
      */
     private BigDecimal calculateTotalLoanInterestCollected(Long tenantId) {
+        // Use LOAN_INTEREST transactions (recorded when repayments are made)
+        List<Transaction> interestTransactions = transactionRepository
+                .findByTenantIdAndType(tenantId, Transaction.TransactionType.LOAN_INTEREST);
+        
+        BigDecimal totalInterestCollected = interestTransactions.stream()
+                .filter(t -> t.getDirection() == Transaction.TransactionDirection.IN)
+                .map(t -> t.getAmount() != null ? t.getAmount() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        
+        // If no LOAN_INTEREST transactions yet (legacy data), fall back to calculation
+        if (totalInterestCollected.compareTo(BigDecimal.ZERO) == 0) {
+            totalInterestCollected = calculateLoanInterestFromLoans(tenantId);
+        }
+        
+        return totalInterestCollected;
+    }
+    
+    /**
+     * Fallback method: Calculate loan interest from loan entities (for legacy data)
+     */
+    private BigDecimal calculateLoanInterestFromLoans(Long tenantId) {
         List<Loan> loans = loanRepository.findByTenantIdOrderByCreatedAtDesc(tenantId).stream()
                 .filter(l -> l.getStatus() == Loan.LoanStatus.CLEARED 
                         || l.getStatus() == Loan.LoanStatus.ACTIVE
@@ -306,7 +336,6 @@ public class ShareCalculationService {
                 totalInterestCollected = totalInterestCollected.add(totalInterest);
             } else if (totalPaid.compareTo(BigDecimal.ZERO) > 0 && totalAmount.compareTo(BigDecimal.ZERO) > 0) {
                 // For active/overdue loans, calculate proportional interest
-                // Assuming payments go toward principal + interest proportionally
                 BigDecimal interestRatio = totalInterest.divide(totalAmount, 6, RoundingMode.HALF_UP);
                 BigDecimal interestPaid = totalPaid.multiply(interestRatio).setScale(2, RoundingMode.HALF_UP);
                 totalInterestCollected = totalInterestCollected.add(interestPaid);
@@ -350,6 +379,20 @@ public class ShareCalculationService {
         return totalReturns;
     }
 
+    /**
+     * Calculate total processing fees collected from loan disbursements and repayments
+     * Uses PROCESSING_FEE transaction type
+     */
+    private BigDecimal calculateTotalProcessingFeesCollected(Long tenantId) {
+        List<Transaction> processingFeeTransactions = transactionRepository
+                .findByTenantIdAndType(tenantId, Transaction.TransactionType.PROCESSING_FEE);
+        
+        return processingFeeTransactions.stream()
+                .filter(t -> t.getDirection() == Transaction.TransactionDirection.IN)
+                .map(t -> t.getAmount() != null ? t.getAmount() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
     @Transactional
     private void updateLastCalculatedAt(ShareSettings settings) {
         settings.setLastCalculatedAt(LocalDateTime.now());
@@ -365,6 +408,7 @@ public class ShareCalculationService {
                 .includeLoanInterest(settings.getIncludeLoanInterest())
                 .includeInvestmentReturns(settings.getIncludeInvestmentReturns())
                 .includePenalties(settings.getIncludePenalties())
+                .includeProcessingFees(settings.getIncludeProcessingFees())
                 .lastCalculatedAt(settings.getLastCalculatedAt() != null 
                         ? settings.getLastCalculatedAt().toString() : null)
                 .build();

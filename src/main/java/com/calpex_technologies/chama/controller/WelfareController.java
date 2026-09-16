@@ -1,10 +1,12 @@
 package com.calpex_technologies.chama.controller;
 
+import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.WelfareContributionDto;
 import com.calpex_technologies.chama.dto.WelfareEventDto;
 import com.calpex_technologies.chama.security.UserPrincipal;
 import com.calpex_technologies.chama.service.WelfareService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -22,6 +24,17 @@ public class WelfareController {
     @GetMapping
     public ResponseEntity<List<WelfareEventDto>> getAllWelfareEvents(@AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(welfareService.getAllWelfareEvents(principal.getTenantId()));
+    }
+
+    @GetMapping("/paginated")
+    public ResponseEntity<PageResponse<WelfareEventDto>> getWelfareEventsPaginated(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String status,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        Page<WelfareEventDto> result = welfareService.getWelfareEventsPaginated(
+                principal.getTenantId(), page, size, status);
+        return ResponseEntity.ok(PageResponse.from(result));
     }
 
     @GetMapping("/{id}")
@@ -69,5 +82,34 @@ public class WelfareController {
             @AuthenticationPrincipal UserPrincipal principal) {
         welfareService.markAllAsPaid(id, principal.getTenantId());
         return ResponseEntity.ok().build();
+    }
+
+    // ==================== PAY FROM CONTRIBUTION FUND ====================
+
+    /**
+     * Pay welfare contribution using funds from a contribution pool
+     */
+    @PostMapping("/{eventId}/contributions/{memberId}/pay-from-fund")
+    public ResponseEntity<WelfareContributionDto> payFromContributionFund(
+            @PathVariable Long eventId,
+            @PathVariable Long memberId,
+            @RequestBody Map<String, Long> body,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        Long contributionTypeId = body.get("contributionTypeId");
+        if (contributionTypeId == null) {
+            throw new RuntimeException("contributionTypeId is required");
+        }
+        return ResponseEntity.ok(welfareService.payFromContributionFund(
+                eventId, memberId, contributionTypeId, principal.getTenantId()));
+    }
+
+    /**
+     * Get member's contribution balances (available pools to pay from)
+     */
+    @GetMapping("/member/{memberId}/contribution-balances")
+    public ResponseEntity<List<WelfareService.ContributionBalanceDto>> getMemberContributionBalances(
+            @PathVariable Long memberId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(welfareService.getMemberContributionBalances(memberId, principal.getTenantId()));
     }
 }

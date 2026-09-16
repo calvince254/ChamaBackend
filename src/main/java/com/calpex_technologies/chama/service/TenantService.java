@@ -36,6 +36,7 @@ public class TenantService {
     private final TransactionRepository transactionRepository;
     private final MerryGoRoundCycleRepository cycleRepository;
     private final PasswordEncoder passwordEncoder;
+    private final EmailService emailService;
 
     private static final String[] MODULES = {
             "dashboard", "members", "meetings", "contributions", "loans",
@@ -232,12 +233,34 @@ public class TenantService {
             selectedRole = rolesMap.get("Admin");  // Fallback to Admin
         }
 
+        // Determine password based on mode
+        String plainPassword;
+        boolean mustChangePassword = false;
+        boolean shouldSendEmail = false;
+        
+        String passwordMode = request.getPasswordMode();
+        if ("default".equalsIgnoreCase(passwordMode)) {
+            // Use default password, require change on first login
+            plainPassword = EmailService.DEFAULT_PASSWORD;
+            mustChangePassword = true;
+            shouldSendEmail = false; // Don't send email for default password
+        } else if ("random".equalsIgnoreCase(passwordMode)) {
+            // Generate random password, send email
+            plainPassword = emailService.generateRandomPassword();
+            mustChangePassword = true;
+            shouldSendEmail = Boolean.TRUE.equals(request.getSendEmail());
+        } else {
+            // Backward compatible - use provided password
+            plainPassword = request.getAdminPassword() != null ? request.getAdminPassword() : "password123";
+            mustChangePassword = false;
+        }
+
         // Create first member with selected role
         Member admin = Member.builder()
                 .name(request.getAdminName())
                 .email(request.getAdminEmail())
                 .phone(request.getAdminPhone() != null ? request.getAdminPhone() : "")
-                .password(passwordEncoder.encode(request.getAdminPassword()))
+                .password(passwordEncoder.encode(plainPassword))
                 .memberNo("M001")
                 .joinDate(LocalDate.now())
                 .status(Member.MemberStatus.ACTIVE)
@@ -246,8 +269,19 @@ public class TenantService {
                 .superAdmin(false)  // Chama admin is NOT a super admin
                 .totalSavings(BigDecimal.ZERO)
                 .totalShares(BigDecimal.ZERO)
+                .mustChangePassword(mustChangePassword)
                 .build();
         memberRepository.save(admin);
+        
+        // Send welcome email with credentials if requested
+        if (shouldSendEmail && request.getAdminEmail() != null && !request.getAdminEmail().isEmpty()) {
+            emailService.sendWelcomeEmail(
+                    request.getAdminEmail(),
+                    request.getAdminName(),
+                    plainPassword,
+                    tenant.getName()
+            );
+        }
 
         return toDto(tenant);
     }
@@ -554,9 +588,11 @@ public class TenantService {
                 .tenantId(tenant.getId())
                 .name(tenant.getName())
                 .registrationFee(tenant.getRegistrationFee())
+                .registrationFeeRequired(tenant.getRegistrationFeeRequired())
                 .minMembers(tenant.getMinMembers())
                 .maxMembers(tenant.getMaxMembers())
                 .signaturesRequired(tenant.getSignaturesRequired())
+                .sessionTimeoutMinutes(tenant.getSessionTimeoutMinutes())
                 .build();
     }
 
@@ -575,6 +611,9 @@ public class TenantService {
         if (dto.getRegistrationFee() != null) {
             tenant.setRegistrationFee(dto.getRegistrationFee());
         }
+        if (dto.getRegistrationFeeRequired() != null) {
+            tenant.setRegistrationFeeRequired(dto.getRegistrationFeeRequired());
+        }
         if (dto.getMinMembers() != null) {
             tenant.setMinMembers(dto.getMinMembers());
         }
@@ -584,6 +623,9 @@ public class TenantService {
         if (dto.getSignaturesRequired() != null) {
             tenant.setSignaturesRequired(dto.getSignaturesRequired());
         }
+        if (dto.getSessionTimeoutMinutes() != null) {
+            tenant.setSessionTimeoutMinutes(dto.getSessionTimeoutMinutes());
+        }
         
         tenant = tenantRepository.save(tenant);
         
@@ -591,9 +633,11 @@ public class TenantService {
                 .tenantId(tenant.getId())
                 .name(tenant.getName())
                 .registrationFee(tenant.getRegistrationFee())
+                .registrationFeeRequired(tenant.getRegistrationFeeRequired())
                 .minMembers(tenant.getMinMembers())
                 .maxMembers(tenant.getMaxMembers())
                 .signaturesRequired(tenant.getSignaturesRequired())
+                .sessionTimeoutMinutes(tenant.getSessionTimeoutMinutes())
                 .build();
     }
 

@@ -2,6 +2,7 @@ package com.calpex_technologies.chama.controller;
 
 import com.calpex_technologies.chama.dto.ContributionDto;
 import com.calpex_technologies.chama.dto.GenerateContributionsRequest;
+import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.RecordPaymentRequest;
 import com.calpex_technologies.chama.scheduler.ContributionScheduler;
 import com.calpex_technologies.chama.security.UserPrincipal;
@@ -40,6 +41,24 @@ public class ContributionController {
             return ResponseEntity.ok(contributionService.getContributionsByMonth(principal.getTenantId(), ym));
         }
         return ResponseEntity.ok(contributionService.getAllContributions(principal.getTenantId()));
+    }
+    
+    /**
+     * Get contributions with pagination by type and month.
+     * Default: 10 items per page.
+     */
+    @GetMapping("/paginated")
+    public ResponseEntity<PageResponse<ContributionDto>> getContributionsPaginated(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam Long contributionTypeId,
+            @RequestParam String month,
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        YearMonth ym = YearMonth.parse(month);
+        PageResponse<ContributionDto> response = contributionService.getContributionsPaginated(
+                principal.getTenantId(), contributionTypeId, ym, status, page, size);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/{id}")

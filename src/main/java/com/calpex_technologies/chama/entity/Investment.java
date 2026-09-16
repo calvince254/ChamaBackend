@@ -96,6 +96,11 @@ public class Investment extends TenantAwareEntity {
     @Builder.Default
     private List<InvestmentValueHistory> valueHistory = new ArrayList<>();
 
+    // Principal top-ups
+    @OneToMany(mappedBy = "investment", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @Builder.Default
+    private List<InvestmentTopup> topups = new ArrayList<>();
+
     // Helper methods for approval tracking
     public long getApprovalCount() {
         return approvals.stream()

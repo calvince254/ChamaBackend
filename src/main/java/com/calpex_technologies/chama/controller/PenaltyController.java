@@ -1,5 +1,6 @@
 package com.calpex_technologies.chama.controller;
 
+import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.PenaltyDto;
 import com.calpex_technologies.chama.dto.RecordPaymentRequest;
 import com.calpex_technologies.chama.security.UserPrincipal;
@@ -31,6 +32,22 @@ public class PenaltyController {
             return ResponseEntity.ok(penaltyService.getPenaltiesByMonth(principal.getTenantId(), ym));
         }
         return ResponseEntity.ok(penaltyService.getAllPenalties(principal.getTenantId()));
+    }
+    
+    /**
+     * Get penalties with pagination.
+     * Default: 10 items per page.
+     */
+    @GetMapping("/paginated")
+    public ResponseEntity<PageResponse<PenaltyDto>> getPenaltiesPaginated(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long memberId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        PageResponse<PenaltyDto> response = penaltyService.getPenaltiesPaginated(
+                principal.getTenantId(), status, memberId, page, size);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/unpaid")

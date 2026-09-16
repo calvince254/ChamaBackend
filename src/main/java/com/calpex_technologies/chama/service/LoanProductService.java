@@ -72,6 +72,10 @@ public class LoanProductService {
                 .requiresApproval(dto.isRequiresApproval())
                 .approvalLevels(dto.getApprovalLevels() != null ? dto.getApprovalLevels() : 1)
                 .active(dto.isActive())
+                .processingFeeEnabled(dto.isProcessingFeeEnabled())
+                .processingFeeType(parseProcessingFeeType(dto.getProcessingFeeType()))
+                .processingFeeValue(dto.getProcessingFeeValue())
+                .processingFeeDeduction(parseProcessingFeeDeduction(dto.getProcessingFeeDeduction()))
                 .build();
 
         product = loanProductRepository.save(product);
@@ -112,11 +116,17 @@ public class LoanProductService {
         product.setRequiresApproval(dto.isRequiresApproval());
         product.setApprovalLevels(dto.getApprovalLevels() != null ? dto.getApprovalLevels() : 1);
         product.setActive(dto.isActive());
+        product.setProcessingFeeEnabled(dto.isProcessingFeeEnabled());
+        product.setProcessingFeeType(parseProcessingFeeType(dto.getProcessingFeeType()));
+        product.setProcessingFeeValue(dto.getProcessingFeeValue());
+        product.setProcessingFeeDeduction(parseProcessingFeeDeduction(dto.getProcessingFeeDeduction()));
 
         product = loanProductRepository.save(product);
 
-        // Update approval levels
+        // Update approval levels - delete existing first, then flush to ensure they're removed
         approvalLevelRepository.deleteByLoanProductId(id);
+        approvalLevelRepository.flush();
+        
         if (dto.isRequiresApproval() && dto.getApprovalLevelConfig() != null) {
             saveApprovalLevels(product, dto.getApprovalLevelConfig());
         }
@@ -211,6 +221,10 @@ public class LoanProductService {
                 .approvalLevels(product.getApprovalLevels())
                 .approvalLevelConfig(levelDtos)
                 .active(product.isActive())
+                .processingFeeEnabled(product.isProcessingFeeEnabled())
+                .processingFeeType(product.getProcessingFeeType() != null ? product.getProcessingFeeType().name() : null)
+                .processingFeeValue(product.getProcessingFeeValue())
+                .processingFeeDeduction(product.getProcessingFeeDeduction() != null ? product.getProcessingFeeDeduction().name() : null)
                 .build();
     }
 
@@ -247,6 +261,24 @@ public class LoanProductService {
             return LoanProduct.PenaltyFrequency.valueOf(freq);
         } catch (IllegalArgumentException e) {
             return LoanProduct.PenaltyFrequency.FLAT;
+        }
+    }
+
+    private LoanProduct.ProcessingFeeType parseProcessingFeeType(String type) {
+        if (type == null) return LoanProduct.ProcessingFeeType.FIXED;
+        try {
+            return LoanProduct.ProcessingFeeType.valueOf(type);
+        } catch (IllegalArgumentException e) {
+            return LoanProduct.ProcessingFeeType.FIXED;
+        }
+    }
+
+    private LoanProduct.ProcessingFeeDeduction parseProcessingFeeDeduction(String deduction) {
+        if (deduction == null) return LoanProduct.ProcessingFeeDeduction.UPFRONT;
+        try {
+            return LoanProduct.ProcessingFeeDeduction.valueOf(deduction);
+        } catch (IllegalArgumentException e) {
+            return LoanProduct.ProcessingFeeDeduction.UPFRONT;
         }
     }
 }

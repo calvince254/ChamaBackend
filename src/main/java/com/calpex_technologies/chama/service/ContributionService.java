@@ -1,10 +1,15 @@
 package com.calpex_technologies.chama.service;
 
 import com.calpex_technologies.chama.dto.ContributionDto;
+import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.entity.*;
 import com.calpex_technologies.chama.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,11 +31,37 @@ public class ContributionService {
     private final TenantRepository tenantRepository;
     private final TransactionRepository transactionRepository;
     private final ContributionTypeRepository contributionTypeRepository;
+    
+    private static final int DEFAULT_PAGE_SIZE = 10;
 
     public List<ContributionDto> getAllContributions(Long tenantId) {
         return contributionRepository.findByTenantIdOrderByMonthDesc(tenantId).stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
+    }
+    
+    /**
+     * Get contributions with pagination by type and month.
+     */
+    public PageResponse<ContributionDto> getContributionsPaginated(Long tenantId, Long contributionTypeId, 
+                                                                    YearMonth month, String status,
+                                                                    int page, int size) {
+        if (size <= 0) size = DEFAULT_PAGE_SIZE;
+        Pageable pageable = PageRequest.of(page, size, Sort.by("member.name").ascending());
+        
+        Page<Contribution> contributionPage;
+        
+        if (status != null && !status.equalsIgnoreCase("ALL") && !status.trim().isEmpty()) {
+            Contribution.ContributionStatus contribStatus = Contribution.ContributionStatus.valueOf(status.toUpperCase());
+            contributionPage = contributionRepository.findByTenantIdAndContributionTypeIdAndMonthAndStatus(
+                    tenantId, contributionTypeId, month, contribStatus, pageable);
+        } else {
+            contributionPage = contributionRepository.findByTenantIdAndContributionTypeIdAndMonth(
+                    tenantId, contributionTypeId, month, pageable);
+        }
+        
+        Page<ContributionDto> dtoPage = contributionPage.map(this::toDto);
+        return PageResponse.from(dtoPage);
     }
 
     public List<ContributionDto> getContributionsByMonth(Long tenantId, YearMonth month) {

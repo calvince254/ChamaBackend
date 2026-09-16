@@ -78,6 +78,24 @@ public class LoanProduct {
     @Builder.Default
     private Integer gracePeriodDays = 0; // Days after due date before penalty
     
+    // Processing fee settings
+    @Column(name = "processing_fee_enabled", nullable = false)
+    @Builder.Default
+    private boolean processingFeeEnabled = false;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "processing_fee_type", length = 20)
+    @Builder.Default
+    private ProcessingFeeType processingFeeType = ProcessingFeeType.PERCENTAGE;
+    
+    @Column(name = "processing_fee_value", precision = 15, scale = 2)
+    private BigDecimal processingFeeValue; // Either fixed amount or percentage
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "processing_fee_deduction", length = 20)
+    @Builder.Default
+    private ProcessingFeeDeduction processingFeeDeduction = ProcessingFeeDeduction.UPFRONT;
+    
     // Approval workflow
     @Column(name = "requires_approval", nullable = false)
     @Builder.Default
@@ -127,5 +145,15 @@ public class LoanProduct {
     public enum PenaltyFrequency {
         FLAT,       // One-time penalty
         PER_PERIOD  // Penalty applied each period (month/day) overdue
+    }
+    
+    public enum ProcessingFeeType {
+        FIXED,      // Fixed amount (e.g., KES 500)
+        PERCENTAGE  // Percentage of principal (e.g., 2%)
+    }
+    
+    public enum ProcessingFeeDeduction {
+        UPFRONT,      // Deduct from loan before disbursement (member receives less)
+        ON_REPAYMENT  // Add to total repayment amount (member pays back more)
     }
 }

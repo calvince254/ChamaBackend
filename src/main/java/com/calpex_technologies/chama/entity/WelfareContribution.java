@@ -41,4 +41,37 @@ public class WelfareContribution extends TenantAwareEntity {
 
     @Column(name = "payment_reference")
     private String paymentReference;
+
+    // ==================== CONTRIBUTION FUND PAYMENT ====================
+    
+    /**
+     * Whether this welfare payment was made using contribution funds
+     */
+    @Column(name = "paid_from_contribution")
+    @Builder.Default
+    private Boolean paidFromContribution = false;
+
+    /**
+     * The contribution type from which funds were deducted
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "source_contribution_type_id")
+    private ContributionType sourceContributionType;
+
+    /**
+     * The specific contribution record that was debited
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "source_contribution_id")
+    private Contribution sourceContribution;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_method")
+    @Builder.Default
+    private PaymentMethod paymentMethod = PaymentMethod.CASH;
+
+    public enum PaymentMethod {
+        CASH,               // Normal cash/direct payment
+        CONTRIBUTION_FUND   // Payment from member's contribution pool
+    }
 }

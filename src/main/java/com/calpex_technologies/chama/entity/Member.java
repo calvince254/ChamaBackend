@@ -67,6 +67,10 @@ public class Member extends BaseEntity {
     @Builder.Default
     private boolean superAdmin = false;
 
+    @Column(name = "must_change_password")
+    @Builder.Default
+    private Boolean mustChangePassword = false;
+
     public enum MemberStatus {
         ACTIVE, SUSPENDED, EXITED
     }

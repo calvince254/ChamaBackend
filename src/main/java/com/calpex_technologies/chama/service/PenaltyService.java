@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
@@ -27,6 +28,7 @@ public class PenaltyService {
     private final MeetingRepository meetingRepository;
     private final ContributionTypeRepository contributionTypeRepository;
     private final FineTypeRepository fineTypeRepository;
+    private final TransactionRepository transactionRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
@@ -35,6 +37,30 @@ public class PenaltyService {
                 .stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
+    }
+    
+    /**
+     * Get penalties with pagination.
+     */
+    public com.calpex_technologies.chama.dto.PageResponse<PenaltyDto> getPenaltiesPaginated(
+            Long tenantId, String status, Long memberId, int page, int size) {
+        if (size <= 0) size = 10;
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
+                page, size, org.springframework.data.domain.Sort.by("imposedAt").descending());
+        
+        org.springframework.data.domain.Page<Penalty> penaltyPage;
+        
+        if (memberId != null) {
+            penaltyPage = penaltyRepository.findByTenantIdAndMemberId(tenantId, memberId, pageable);
+        } else if (status != null && !status.equalsIgnoreCase("ALL") && !status.trim().isEmpty()) {
+            Penalty.PenaltyStatus penaltyStatus = Penalty.PenaltyStatus.valueOf(status.toUpperCase());
+            penaltyPage = penaltyRepository.findByTenantIdAndStatus(tenantId, penaltyStatus, pageable);
+        } else {
+            penaltyPage = penaltyRepository.findByTenantIdOrderByImposedAtDesc(tenantId, pageable);
+        }
+        
+        org.springframework.data.domain.Page<PenaltyDto> dtoPage = penaltyPage.map(this::toDto);
+        return com.calpex_technologies.chama.dto.PageResponse.from(dtoPage);
     }
 
     public List<PenaltyDto> getPenaltiesByMonth(Long tenantId, YearMonth month) {
@@ -276,6 +302,24 @@ public class PenaltyService {
         }
 
         penalty = penaltyRepository.save(penalty);
+        
+        // Create GL transaction for penalty payment
+        String description = String.format("Penalty payment - %s (%s)", 
+                penalty.getMember().getName(), penalty.getReason());
+        Transaction transaction = Transaction.builder()
+                .tenant(penalty.getTenant())
+                .date(LocalDate.now())
+                .type(Transaction.TransactionType.PENALTY)
+                .description(description)
+                .amount(amount)
+                .direction(Transaction.TransactionDirection.IN)
+                .member(penalty.getMember())
+                .referenceId(penalty.getId())
+                .referenceType("PENALTY")
+                .build();
+        transactionRepository.save(transaction);
+        log.info("Created GL transaction for penalty payment: {} amount {}", penaltyId, amount);
+        
         return toDto(penalty);
     }
 

@@ -70,6 +70,11 @@ public class ShareSettings extends BaseEntity {
     @Builder.Default
     private Boolean includePenalties = false;
 
+    // Include processing fees collected in profit pool
+    @Column(name = "include_processing_fees")
+    @Builder.Default
+    private Boolean includeProcessingFees = false;
+
     // ==================== METADATA ====================
     
     @Column(name = "last_calculated_at")

@@ -22,4 +22,11 @@ public class WelfareContributionDto {
     private Boolean paid;
     private String paidDate;
     private String paymentReference;
+    
+    // Contribution fund payment fields
+    private Boolean paidFromContribution;
+    private Long sourceContributionTypeId;
+    private String sourceContributionTypeName;
+    private Long sourceContributionId;
+    private String paymentMethod;
 }

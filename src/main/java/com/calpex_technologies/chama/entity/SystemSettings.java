@@ -1,6 +1,7 @@
 package com.calpex_technologies.chama.entity;
 
 import jakarta.persistence.*;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.NoArgsConstructor;
@@ -19,9 +20,54 @@ import lombok.experimental.SuperBuilder;
 public class SystemSettings extends BaseEntity {
 
     /**
+     * Platform name displayed on invoices and throughout the system
+     */
+    @Column(name = "platform_name", nullable = false)
+    @Builder.Default
+    private String platformName = "Calpex Chama Manager";
+
+    /**
+     * Platform contact email for invoices and support
+     */
+    @Column(name = "platform_email")
+    @Builder.Default
+    private String platformEmail = "support@calpex.co.ke";
+
+    /**
+     * Platform contact phone
+     */
+    @Column(name = "platform_phone")
+    private String platformPhone;
+
+    /**
+     * M-PESA paybill number for payments
+     */
+    @Column(name = "mpesa_paybill")
+    private String mpesaPaybill;
+
+    /**
+     * Bank name for payments
+     */
+    @Column(name = "bank_name")
+    private String bankName;
+
+    /**
+     * Bank account name
+     */
+    @Column(name = "bank_account_name")
+    private String bankAccountName;
+
+    /**
+     * Bank account number
+     */
+    @Column(name = "bank_account_number")
+    private String bankAccountNumber;
+
+    /**
      * Token expiry time in hours (default: 24 hours)
      */
     @Column(name = "token_expiry_hours", nullable = false)
+    @Builder.Default
     private Integer tokenExpiryHours = 24;
 
     /**

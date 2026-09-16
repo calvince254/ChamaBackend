@@ -7,6 +7,7 @@ import java.time.LocalDateTime;
 /**
  * Tracks each approval/rejection action on a loan.
  * Creates an audit trail of who approved/rejected at each level and when.
+ * Supports both guarantor approvals (parallel) and approver approvals (sequential).
  */
 @Entity
 @Table(name = "loan_approvals")
@@ -24,8 +25,13 @@ public class LoanApproval {
     @JoinColumn(name = "loan_id", nullable = false)
     private Loan loan;
     
-    @Column(nullable = false)
-    private Integer level; // Which approval level (1, 2, or 3)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "approval_type", nullable = false, length = 20)
+    @Builder.Default
+    private ApprovalType approvalType = ApprovalType.APPROVER; // GUARANTOR or APPROVER
+    
+    @Column
+    private Integer level; // Which approval level (1, 2, or 3) - null for guarantors
     
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "approver_id", nullable = false)
@@ -33,7 +39,7 @@ public class LoanApproval {
     
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "role_id")
-    private Role approverRole; // The role they were acting as
+    private Role approverRole; // The role they were acting as (for approvers)
     
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -56,5 +62,10 @@ public class LoanApproval {
         APPROVED,   // Approved at this level
         REJECTED,   // Rejected at this level
         RETURNED    // Returned for corrections/more info
+    }
+    
+    public enum ApprovalType {
+        GUARANTOR,  // Guarantor approval (Phase 1 - parallel)
+        APPROVER    // Level-based approver (Phase 2 - sequential)
     }
 }

@@ -5,6 +5,7 @@ import com.calpex_technologies.chama.security.UserPrincipal;
 import com.calpex_technologies.chama.service.InvestmentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -22,6 +23,18 @@ public class InvestmentController {
     @GetMapping
     public ResponseEntity<List<InvestmentDto>> getAllInvestments(@AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(investmentService.getAllInvestments(principal.getTenantId()));
+    }
+
+    @GetMapping("/paginated")
+    public ResponseEntity<PageResponse<InvestmentDto>> getInvestmentsPaginated(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String approvalStatus,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        Page<InvestmentDto> result = investmentService.getInvestmentsPaginated(
+                principal.getTenantId(), page, size, status, approvalStatus);
+        return ResponseEntity.ok(PageResponse.from(result));
     }
 
     @GetMapping("/{id}")
@@ -109,6 +122,21 @@ public class InvestmentController {
             @PathVariable Long id,
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(investmentService.getValueHistory(id, principal.getTenantId()));
+    }
+
+    @PostMapping("/{id}/topup")
+    public ResponseEntity<InvestmentDto> topupInvestment(
+            @PathVariable Long id,
+            @Valid @RequestBody TopupInvestmentRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(investmentService.topupInvestment(id, principal.getTenantId(), principal.getMemberId(), request));
+    }
+
+    @GetMapping("/{id}/topups")
+    public ResponseEntity<List<InvestmentTopupDto>> getTopupHistory(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(investmentService.getTopupHistory(id, principal.getTenantId()));
     }
 
     @DeleteMapping("/{id}")

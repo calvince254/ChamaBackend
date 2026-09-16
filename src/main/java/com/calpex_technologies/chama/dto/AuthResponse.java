@@ -28,4 +28,10 @@ public class AuthResponse {
     // For multi-chama users - if this list is not empty, user needs to select a chama
     private List<TenantSelectionDto> availableTenants;
     private Boolean multiTenant; // True if user needs to select a chama
+    
+    // For first-login password change requirement
+    private Boolean mustChangePassword;
+    
+    // Session timeout in minutes (0 = no timeout, for frontend idle detection)
+    private Integer sessionTimeoutMinutes;
 }

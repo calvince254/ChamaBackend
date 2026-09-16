@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -24,6 +25,7 @@ public class FineService {
     private final MeetingRepository meetingRepository;
     private final MemberRepository memberRepository;
     private final TenantRepository tenantRepository;
+    private final TransactionRepository transactionRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
@@ -101,6 +103,22 @@ public class FineService {
 
         // Update meeting fines collected total
         updateMeetingFinesTotal(fine.getMeeting());
+        
+        // Create GL transaction for fine payment
+        String description = String.format("Fine payment - %s (%s)", 
+                fine.getMember().getName(), fine.getFineType().getName());
+        Transaction transaction = Transaction.builder()
+                .tenant(fine.getTenant())
+                .date(LocalDate.now())
+                .type(Transaction.TransactionType.FINE)
+                .description(description)
+                .amount(fine.getAmount())
+                .direction(Transaction.TransactionDirection.IN)
+                .member(fine.getMember())
+                .referenceId(fine.getId())
+                .referenceType("FINE")
+                .build();
+        transactionRepository.save(transaction);
 
         return toDto(fine);
     }
@@ -142,6 +160,22 @@ public class FineService {
 
         // Update meeting fines collected total
         updateMeetingFinesTotal(fine.getMeeting());
+        
+        // Create GL transaction for fine payment
+        String description = String.format("Fine payment - %s (%s)", 
+                fine.getMember().getName(), fine.getFineType().getName());
+        Transaction transaction = Transaction.builder()
+                .tenant(fine.getTenant())
+                .date(LocalDate.now())
+                .type(Transaction.TransactionType.FINE)
+                .description(description)
+                .amount(amount)
+                .direction(Transaction.TransactionDirection.IN)
+                .member(fine.getMember())
+                .referenceId(fine.getId())
+                .referenceType("FINE")
+                .build();
+        transactionRepository.save(transaction);
 
         return toDto(fine);
     }

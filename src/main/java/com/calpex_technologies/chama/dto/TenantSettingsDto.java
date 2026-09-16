@@ -19,7 +19,11 @@ public class TenantSettingsDto {
     private Long tenantId;
     private String name;
     private BigDecimal registrationFee;
+    private Boolean registrationFeeRequired;
     private Integer minMembers;
     private Integer maxMembers;
     private Integer signaturesRequired;
+    
+    // Session timeout in minutes (0 = no timeout)
+    private Integer sessionTimeoutMinutes;
 }

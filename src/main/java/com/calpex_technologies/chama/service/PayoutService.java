@@ -305,6 +305,28 @@ public class PayoutService {
                 .map(this::toDto)
                 .collect(Collectors.toList());
     }
+    
+    /**
+     * Get payouts with pagination.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<PayoutDto> getPayoutsPaginated(Long tenantId, String status, int page, int size) {
+        if (size <= 0) size = 10;
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
+                page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        
+        org.springframework.data.domain.Page<Payout> payoutPage;
+        
+        if (status != null && !status.equalsIgnoreCase("ALL") && !status.trim().isEmpty()) {
+            Payout.PayoutStatus payoutStatus = Payout.PayoutStatus.valueOf(status.toUpperCase());
+            payoutPage = payoutRepository.findByTenantIdAndStatus(tenantId, payoutStatus, pageable);
+        } else {
+            payoutPage = payoutRepository.findByTenantIdOrderByCreatedAtDesc(tenantId, pageable);
+        }
+        
+        org.springframework.data.domain.Page<PayoutDto> dtoPage = payoutPage.map(this::toDto);
+        return PageResponse.from(dtoPage);
+    }
 
     /**
      * Get a single payout with member details

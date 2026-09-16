@@ -32,6 +32,12 @@ public class LoanProductDto {
     private String penaltyFrequency; // FLAT, PER_PERIOD
     private Integer gracePeriodDays;
     
+    // Processing fee settings
+    private boolean processingFeeEnabled;
+    private String processingFeeType; // FIXED, PERCENTAGE
+    private BigDecimal processingFeeValue; // Amount or percentage
+    private String processingFeeDeduction; // UPFRONT, ON_REPAYMENT
+    
     // Approval settings
     private boolean requiresApproval;
     private Integer approvalLevels;

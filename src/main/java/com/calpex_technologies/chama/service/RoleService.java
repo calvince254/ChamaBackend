@@ -165,12 +165,16 @@ public class RoleService {
             throw new RuntimeException("Cannot modify system default role");
         }
 
-        // Clear existing role permissions
+        // Delete existing role permissions explicitly first
+        rolePermissionRepository.deleteByRoleId(role.getId());
+        rolePermissionRepository.flush();
+        
+        // Clear the collection in memory
         role.getRolePermissions().clear();
         
-        // Add new permission codes
+        // Add new permission codes (avoid duplicates)
         if (permissionCodes != null) {
-            for (String code : permissionCodes) {
+            for (String code : permissionCodes.stream().distinct().collect(Collectors.toList())) {
                 RolePermission rp = RolePermission.builder()
                         .role(role)
                         .permissionCode(code)
@@ -190,6 +194,15 @@ public class RoleService {
 
         if (role.isSystemDefault()) {
             throw new RuntimeException("Cannot delete system default role");
+        }
+
+        // Check if any members are using this role
+        long memberCount = memberRepository.findByTenantId(tenantId).stream()
+                .filter(m -> m.getRole() != null && m.getRole().getId().equals(role.getId()))
+                .count();
+        
+        if (memberCount > 0) {
+            throw new RuntimeException("Cannot delete role '" + role.getName() + "' because it is assigned to " + memberCount + " member(s). Please reassign these members to a different role first.");
         }
 
         roleRepository.delete(role);

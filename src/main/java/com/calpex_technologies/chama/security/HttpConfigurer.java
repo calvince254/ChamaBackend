@@ -20,7 +20,10 @@ public class HttpConfigurer {
     public void configure(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(auth -> auth
             // ==================== PUBLIC ENDPOINTS ====================
-            .requestMatchers("/api/auth/**").permitAll()
+            .requestMatchers("/api/auth/login", "/api/auth/login/**", "/api/auth/super-admin/login").permitAll()
+            // Change password and logout require authentication
+            .requestMatchers("/api/auth/change-password").authenticated()
+            .requestMatchers("/api/auth/logout").authenticated()
             .requestMatchers("/api/permissions").hasAnyAuthority("FULL_ACCESS", "VIEW_ROLES", "MANAGE_ROLE_PERMISSIONS")  // Get available permissions for roles UI
             .requestMatchers("/h2-console/**").permitAll()
             
@@ -30,6 +33,7 @@ public class HttpConfigurer {
             .requestMatchers("POST", "/api/members").hasAnyAuthority("FULL_ACCESS", "CREATE_MEMBER")
             .requestMatchers("PUT", "/api/members/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_MEMBER")
             .requestMatchers("DELETE", "/api/members/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_MEMBER")
+            .requestMatchers("DELETE", "/api/members/{id}/hard").hasAnyAuthority("FULL_ACCESS", "HARD_DELETE_MEMBER")
             .requestMatchers("PATCH", "/api/members/{id}/deactivate").hasAnyAuthority("FULL_ACCESS", "DEACTIVATE_MEMBER")
             .requestMatchers("PATCH", "/api/members/{id}/activate").hasAnyAuthority("FULL_ACCESS", "ACTIVATE_MEMBER")
             
@@ -128,6 +132,7 @@ public class HttpConfigurer {
             .requestMatchers("PUT", "/api/investments/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_INVESTMENT")
             .requestMatchers("DELETE", "/api/investments/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_INVESTMENT")
             .requestMatchers("POST", "/api/investments/{id}/close").hasAnyAuthority("FULL_ACCESS", "CLOSE_INVESTMENT")
+            .requestMatchers("POST", "/api/investments/{id}/topup").hasAnyAuthority("FULL_ACCESS", "TOPUP_INVESTMENT")
             
             // ==================== MERRY-GO-ROUND ====================
             .requestMatchers("GET", "/api/merry-go-round/**").hasAnyAuthority("FULL_ACCESS", "VIEW_MERRY_GO_ROUND")
@@ -140,8 +145,11 @@ public class HttpConfigurer {
             .requestMatchers("PUT", "/api/merry-go-round/cycles/{id}/participants/**").hasAnyAuthority("FULL_ACCESS", "EDIT_MGR_CYCLE")
             // Rounds
             .requestMatchers("POST", "/api/merry-go-round/rounds/{id}/pay").hasAnyAuthority("FULL_ACCESS", "COMPLETE_MGR_ROUND")
+            .requestMatchers("POST", "/api/merry-go-round/rounds/{id}/payout").hasAnyAuthority("FULL_ACCESS", "COMPLETE_MGR_ROUND")
             // Contributions
-            .requestMatchers("POST", "/api/merry-go-round/contributions/**").hasAnyAuthority("FULL_ACCESS", "RECORD_MGR_CONTRIBUTION")
+            .requestMatchers("POST", "/api/merry-go-round/contributions/{id}/pay").hasAnyAuthority("FULL_ACCESS", "RECORD_MGR_CONTRIBUTION")
+            .requestMatchers("POST", "/api/merry-go-round/contributions/pay-multiple").hasAnyAuthority("FULL_ACCESS", "RECORD_MGR_CONTRIBUTION")
+            .requestMatchers("POST", "/api/merry-go-round/contributions/{contributionId}/fine").hasAnyAuthority("FULL_ACCESS", "IMPOSE_MGR_FINE")
             // Fines
             .requestMatchers("POST", "/api/merry-go-round/fines").hasAnyAuthority("FULL_ACCESS", "IMPOSE_MGR_FINE")
             .requestMatchers("POST", "/api/merry-go-round/fines/{id}/pay").hasAnyAuthority("FULL_ACCESS", "PAY_MGR_FINE")
@@ -173,6 +181,33 @@ public class HttpConfigurer {
             .requestMatchers("DELETE", "/api/roles/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_ROLE")
             .requestMatchers("PUT", "/api/roles/{id}/permissions").hasAnyAuthority("FULL_ACCESS", "MANAGE_ROLE_PERMISSIONS")
             
+            // ==================== BILLING (Chama Admin - view own invoices) ====================
+            .requestMatchers("GET", "/api/licenses/invoices/my").hasAnyAuthority("FULL_ACCESS", "VIEW_BILLING")
+            .requestMatchers("GET", "/api/licenses/invoices/my/{id}").hasAnyAuthority("FULL_ACCESS", "VIEW_BILLING")
+            .requestMatchers("GET", "/api/licenses/invoices/my/{id}/pdf").hasAnyAuthority("FULL_ACCESS", "VIEW_BILLING")
+            .requestMatchers("GET", "/api/licenses/transactions/my").hasAnyAuthority("FULL_ACCESS", "VIEW_BILLING")
+            .requestMatchers("GET", "/api/licenses/my-license").hasAnyAuthority("FULL_ACCESS", "VIEW_BILLING")
+            
+            // ==================== LICENSE MANAGEMENT (Super Admin only) ====================
+            .requestMatchers("GET", "/api/licenses").hasAuthority("FULL_ACCESS")
+            .requestMatchers("GET", "/api/licenses/tenant/{tenantId}").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/tenant/{tenantId}").hasAuthority("FULL_ACCESS")
+            .requestMatchers("PUT", "/api/licenses/{id}").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/{id}/suspend").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/{id}/activate").hasAuthority("FULL_ACCESS")
+            .requestMatchers("GET", "/api/licenses/transactions/tenant/{tenantId}").hasAuthority("FULL_ACCESS")
+            .requestMatchers("GET", "/api/licenses/transactions/tenant/{tenantId}/uninvoiced").hasAuthority("FULL_ACCESS")
+            .requestMatchers("GET", "/api/licenses/invoices/outstanding").hasAuthority("FULL_ACCESS")
+            .requestMatchers("GET", "/api/licenses/invoices/tenant/{tenantId}").hasAuthority("FULL_ACCESS")
+            .requestMatchers("GET", "/api/licenses/invoices/{id}").hasAuthority("FULL_ACCESS")
+            .requestMatchers("GET", "/api/licenses/invoices/{id}/pdf").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/invoices/generate").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/invoices/{id}/send").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/invoices/{id}/payment").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/invoices/{id}/mark-paid").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/invoices/{id}/cancel").hasAuthority("FULL_ACCESS")
+            .requestMatchers("POST", "/api/licenses/check-overdue").hasAuthority("FULL_ACCESS")
+            
             // ==================== TENANTS (Super Admin only for most operations) ====================
             // Regular users can access their own tenant settings
             .requestMatchers("GET", "/api/tenants/settings").hasAnyAuthority("FULL_ACCESS", "VIEW_TENANT_SETTINGS")
@@ -185,6 +220,44 @@ public class HttpConfigurer {
             
             // ==================== DASHBOARD ====================
             .requestMatchers("GET", "/api/dashboard/**").hasAnyAuthority("FULL_ACCESS", "VIEW_DASHBOARD")
+            
+            // ==================== REGISTRATION FEE ====================
+            .requestMatchers("GET", "/api/registration-fee/info").authenticated()
+            .requestMatchers("GET", "/api/registration-fee/member/{memberId}").authenticated()
+            .requestMatchers("GET", "/api/registration-fee").hasAnyAuthority("FULL_ACCESS", "VIEW_REGISTRATION_FEES")
+            .requestMatchers("GET", "/api/registration-fee/awaiting-verification").hasAnyAuthority("FULL_ACCESS", "VERIFY_REGISTRATION_FEE")
+            .requestMatchers("GET", "/api/registration-fee/awaiting-verification/count").hasAnyAuthority("FULL_ACCESS", "VERIFY_REGISTRATION_FEE")
+            .requestMatchers("POST", "/api/registration-fee/pay").hasAnyAuthority("FULL_ACCESS", "PAY_REGISTRATION_FEE")
+            .requestMatchers("POST", "/api/registration-fee/{id}/verify").hasAnyAuthority("FULL_ACCESS", "VERIFY_REGISTRATION_FEE")
+            .requestMatchers("POST", "/api/registration-fee/{id}/reject").hasAnyAuthority("FULL_ACCESS", "VERIFY_REGISTRATION_FEE")
+            
+            // ==================== RESOURCES ====================
+            .requestMatchers("GET", "/api/resources").hasAnyAuthority("FULL_ACCESS", "VIEW_RESOURCES")
+            .requestMatchers("GET", "/api/resources/paginated").hasAnyAuthority("FULL_ACCESS", "VIEW_RESOURCES")
+            .requestMatchers("GET", "/api/resources/{id}").hasAnyAuthority("FULL_ACCESS", "VIEW_RESOURCES")
+            .requestMatchers("GET", "/api/resources/{id}/download").hasAnyAuthority("FULL_ACCESS", "DOWNLOAD_RESOURCE")
+            .requestMatchers("POST", "/api/resources").hasAnyAuthority("FULL_ACCESS", "UPLOAD_RESOURCE")
+            .requestMatchers("PUT", "/api/resources/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_RESOURCE")
+            .requestMatchers("DELETE", "/api/resources/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_RESOURCE")
+            .requestMatchers("DELETE", "/api/resources/{id}/hard").hasAnyAuthority("FULL_ACCESS", "DELETE_RESOURCE")
+            
+            // ==================== AUDIT LOGS ====================
+            .requestMatchers("GET", "/api/audit-logs").hasAnyAuthority("FULL_ACCESS", "VIEW_AUDIT_LOGS")
+            .requestMatchers("GET", "/api/audit-logs/{id}").hasAnyAuthority("FULL_ACCESS", "VIEW_AUDIT_DETAILS")
+            .requestMatchers("GET", "/api/audit-logs/modules").hasAnyAuthority("FULL_ACCESS", "VIEW_AUDIT_LOGS")
+            .requestMatchers("GET", "/api/audit-logs/actions").hasAnyAuthority("FULL_ACCESS", "VIEW_AUDIT_LOGS")
+            .requestMatchers("GET", "/api/audit-logs/statistics").hasAnyAuthority("FULL_ACCESS", "VIEW_AUDIT_STATISTICS")
+            .requestMatchers("GET", "/api/audit-logs/all").hasAuthority("FULL_ACCESS") // Super admin only
+            .requestMatchers("DELETE", "/api/audit-logs/cleanup").hasAnyAuthority("FULL_ACCESS", "CLEANUP_AUDIT_LOGS")
+            
+            // ==================== CONTRIBUTION TOP-UPS ====================
+            .requestMatchers("GET", "/api/contribution-topups").hasAnyAuthority("FULL_ACCESS", "VIEW_CONTRIBUTION_TOPUPS")
+            .requestMatchers("GET", "/api/contribution-topups/my").hasAnyAuthority("FULL_ACCESS", "REQUEST_CONTRIBUTION_TOPUP")
+            .requestMatchers("GET", "/api/contribution-topups/{id}").hasAnyAuthority("FULL_ACCESS", "VIEW_CONTRIBUTION_TOPUPS")
+            .requestMatchers("GET", "/api/contribution-topups/pending-count").hasAnyAuthority("FULL_ACCESS", "VIEW_CONTRIBUTION_TOPUPS")
+            .requestMatchers("POST", "/api/contribution-topups").hasAnyAuthority("FULL_ACCESS", "REQUEST_CONTRIBUTION_TOPUP")
+            .requestMatchers("POST", "/api/contribution-topups/{id}/approve").hasAnyAuthority("FULL_ACCESS", "APPROVE_CONTRIBUTION_TOPUP")
+            .requestMatchers("POST", "/api/contribution-topups/{id}/reject").hasAnyAuthority("FULL_ACCESS", "APPROVE_CONTRIBUTION_TOPUP")
             
             // ==================== DEFAULT ====================
             .anyRequest().authenticated()
@@ -209,7 +282,8 @@ public class HttpConfigurer {
             new PermissionDefinition("VIEW_MEMBER_DETAILS", "View Member Details"),
             new PermissionDefinition("CREATE_MEMBER", "Create Member"),
             new PermissionDefinition("EDIT_MEMBER", "Edit Member"),
-            new PermissionDefinition("DELETE_MEMBER", "Delete Member"),
+            new PermissionDefinition("DELETE_MEMBER", "Delete Member (Soft)"),
+            new PermissionDefinition("HARD_DELETE_MEMBER", "Permanently Delete Member & Data"),
             new PermissionDefinition("ACTIVATE_MEMBER", "Activate Member"),
             new PermissionDefinition("DEACTIVATE_MEMBER", "Deactivate Member")
         ));
@@ -225,7 +299,10 @@ public class HttpConfigurer {
             new PermissionDefinition("DELETE_CONTRIBUTION", "Delete Contribution"),
             new PermissionDefinition("APPROVE_CONTRIBUTION", "Approve Contribution"),
             new PermissionDefinition("CHECK_LATE_PAYMENTS", "Check Late Payments"),
-            new PermissionDefinition("WAIVE_PENALTY", "Waive Penalty")
+            new PermissionDefinition("WAIVE_PENALTY", "Waive Penalty"),
+            new PermissionDefinition("VIEW_CONTRIBUTION_TOPUPS", "View Top-Up Requests"),
+            new PermissionDefinition("REQUEST_CONTRIBUTION_TOPUP", "Request Contribution Top-Up"),
+            new PermissionDefinition("APPROVE_CONTRIBUTION_TOPUP", "Approve/Reject Top-Up Requests")
         ));
         
         // Loans
@@ -240,6 +317,7 @@ public class HttpConfigurer {
             new PermissionDefinition("REJECT_LOAN", "Reject Loan"),
             new PermissionDefinition("DISBURSE_LOAN", "Disburse Loan"),
             new PermissionDefinition("RECORD_LOAN_REPAYMENT", "Record Loan Repayment"),
+            new PermissionDefinition("VERIFY_LOAN_PAYMENT", "Verify Loan Payment"),
             new PermissionDefinition("VIEW_LOAN_PENALTIES", "View Loan Penalties"),
             new PermissionDefinition("WAIVE_LOAN_PENALTY", "Waive Loan Penalty"),
             new PermissionDefinition("PAY_LOAN_PENALTY", "Pay Loan Penalty")
@@ -270,7 +348,8 @@ public class HttpConfigurer {
             new PermissionDefinition("DELETE_WELFARE_EVENT", "Delete Welfare Event"),
             new PermissionDefinition("APPROVE_WELFARE_CLAIM", "Approve Welfare Claim"),
             new PermissionDefinition("DISBURSE_WELFARE", "Disburse Welfare"),
-            new PermissionDefinition("MANAGE_WELFARE_CONTRIBUTIONS", "Manage Welfare Contributions")
+            new PermissionDefinition("MANAGE_WELFARE_CONTRIBUTIONS", "Manage Welfare Contributions"),
+            new PermissionDefinition("PAY_WELFARE_FROM_CONTRIBUTION", "Pay Welfare from Contribution Fund")
         ));
         
         // Finance
@@ -307,7 +386,8 @@ public class HttpConfigurer {
             new PermissionDefinition("CREATE_INVESTMENT", "Create Investment"),
             new PermissionDefinition("EDIT_INVESTMENT", "Edit Investment"),
             new PermissionDefinition("DELETE_INVESTMENT", "Delete Investment"),
-            new PermissionDefinition("CLOSE_INVESTMENT", "Close Investment")
+            new PermissionDefinition("CLOSE_INVESTMENT", "Close Investment"),
+            new PermissionDefinition("TOPUP_INVESTMENT", "Add Principal (Top-up)")
         ));
         
         // Merry-Go-Round
@@ -350,6 +430,11 @@ public class HttpConfigurer {
             new PermissionDefinition("MANAGE_ROLE_PERMISSIONS", "Manage Permissions")
         ));
         
+        // Billing
+        permissions.put("Billing", java.util.List.of(
+            new PermissionDefinition("VIEW_BILLING", "View Billing & Invoices")
+        ));
+        
         // Settings
         permissions.put("Settings", java.util.List.of(
             new PermissionDefinition("VIEW_TENANT_SETTINGS", "View General Settings"),
@@ -366,6 +451,30 @@ public class HttpConfigurer {
             new PermissionDefinition("CREATE_FINE_TYPE", "Create Fine Type"),
             new PermissionDefinition("EDIT_FINE_TYPE", "Edit Fine Type"),
             new PermissionDefinition("DELETE_FINE_TYPE", "Delete Fine Type")
+        ));
+        
+        // Registration Fee
+        permissions.put("Registration Fee", java.util.List.of(
+            new PermissionDefinition("VIEW_REGISTRATION_FEES", "View Registration Fee Payments"),
+            new PermissionDefinition("PAY_REGISTRATION_FEE", "Pay Registration Fee"),
+            new PermissionDefinition("VERIFY_REGISTRATION_FEE", "Verify/Reject Registration Fee Payment")
+        ));
+        
+        // Resources
+        permissions.put("Resources", java.util.List.of(
+            new PermissionDefinition("VIEW_RESOURCES", "View Resources"),
+            new PermissionDefinition("DOWNLOAD_RESOURCE", "Download Resources"),
+            new PermissionDefinition("UPLOAD_RESOURCE", "Upload Resources"),
+            new PermissionDefinition("EDIT_RESOURCE", "Edit Resource Details"),
+            new PermissionDefinition("DELETE_RESOURCE", "Delete Resources")
+        ));
+        
+        // Audit Trail
+        permissions.put("Audit Trail", java.util.List.of(
+            new PermissionDefinition("VIEW_AUDIT_LOGS", "View Audit Logs"),
+            new PermissionDefinition("VIEW_AUDIT_DETAILS", "View Audit Log Details"),
+            new PermissionDefinition("VIEW_AUDIT_STATISTICS", "View Audit Statistics"),
+            new PermissionDefinition("CLEANUP_AUDIT_LOGS", "Clean Up Old Audit Logs")
         ));
         
         return permissions;

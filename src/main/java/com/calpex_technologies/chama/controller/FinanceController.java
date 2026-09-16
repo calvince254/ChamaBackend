@@ -1,10 +1,12 @@
 package com.calpex_technologies.chama.controller;
 
 import com.calpex_technologies.chama.dto.FinanceSummaryDto;
+import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.TransactionDto;
 import com.calpex_technologies.chama.security.UserPrincipal;
 import com.calpex_technologies.chama.service.FinanceService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -28,6 +30,19 @@ public class FinanceController {
     @GetMapping("/transactions")
     public ResponseEntity<List<TransactionDto>> getTransactions(@AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(financeService.getTransactions(principal.getTenantId()));
+    }
+
+    @GetMapping("/transactions/paginated")
+    public ResponseEntity<PageResponse<TransactionDto>> getTransactionsPaginated(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String type,
+            @RequestParam(required = false) String direction,
+            @RequestParam(required = false) Long memberId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        Page<TransactionDto> result = financeService.getTransactionsPaginated(
+                principal.getTenantId(), page, size, type, direction, memberId);
+        return ResponseEntity.ok(PageResponse.from(result));
     }
 
     @GetMapping("/transactions/range")

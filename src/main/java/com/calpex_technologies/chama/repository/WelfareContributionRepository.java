@@ -29,4 +29,7 @@ public interface WelfareContributionRepository extends JpaRepository<WelfareCont
     @Modifying
     @Query("DELETE FROM WelfareContribution wc WHERE wc.member.id = :memberId")
     void deleteByMember(Long memberId);
+    
+    @Query("SELECT COALESCE(SUM(wc.amountPaid), 0) FROM WelfareContribution wc WHERE wc.tenant.id = :tenantId AND wc.paid = true")
+    java.math.BigDecimal sumByTenantId(@org.springframework.data.repository.query.Param("tenantId") Long tenantId);
 }

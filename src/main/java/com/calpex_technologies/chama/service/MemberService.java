@@ -5,6 +5,10 @@ import com.calpex_technologies.chama.entity.*;
 import com.calpex_technologies.chama.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,15 +39,85 @@ public class MemberService {
     private final MerryGoRoundContributionRepository mgrContributionRepository;
     private final MerryGoRoundRoundRepository mgrRoundRepository;
     private final ShareCalculationService shareCalculationService;
+    private final EmailService emailService;
+    
+    private static final int DEFAULT_PAGE_SIZE = 10;
 
     @Transactional(readOnly = true)
     public List<MemberDto> getAllMembers(Long tenantId) {
         log.info("MemberService.getAllMembers called with tenantId={}", tenantId);
         List<Member> members = memberRepository.findByTenantIdWithRole(tenantId);
         log.info("Found {} members for tenantId={}", members.size(), tenantId);
-        return members.stream()
+        
+        List<MemberDto> memberDtos = members.stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
+        
+        // Fetch share percentages from ShareCalculationService and enrich member DTOs
+        ShareCalculationDto shareCalc = shareCalculationService.calculateShares(tenantId);
+        Map<Long, BigDecimal> memberSharePercentages = new HashMap<>();
+        if (shareCalc.getMemberShares() != null) {
+            for (MemberShareDto share : shareCalc.getMemberShares()) {
+                memberSharePercentages.put(share.getMemberId(), share.getSharePercentage());
+            }
+        }
+        
+        // Update totalShares with share percentage from calculation
+        for (MemberDto dto : memberDtos) {
+            BigDecimal sharePercentage = memberSharePercentages.getOrDefault(dto.getId(), BigDecimal.ZERO);
+            dto.setTotalShares(sharePercentage);
+        }
+        
+        return memberDtos;
+    }
+    
+    /**
+     * Get members with pagination, search, and status filter.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<MemberDto> getMembersPaginated(Long tenantId, int page, int size, 
+                                                        String search, String status) {
+        if (size <= 0) size = DEFAULT_PAGE_SIZE;
+        Pageable pageable = PageRequest.of(page, size, Sort.by("name").ascending());
+        
+        Page<Member> memberPage;
+        
+        boolean hasSearch = search != null && !search.trim().isEmpty();
+        boolean hasStatus = status != null && !status.equalsIgnoreCase("ALL") && !status.trim().isEmpty();
+        
+        if (hasSearch && hasStatus) {
+            Member.MemberStatus memberStatus = Member.MemberStatus.valueOf(status.toUpperCase());
+            memberPage = memberRepository.findByTenantIdWithRoleStatusAndSearch(tenantId, memberStatus, search.trim(), pageable);
+        } else if (hasSearch) {
+            memberPage = memberRepository.findByTenantIdWithRoleAndSearch(tenantId, search.trim(), pageable);
+        } else if (hasStatus) {
+            Member.MemberStatus memberStatus = Member.MemberStatus.valueOf(status.toUpperCase());
+            memberPage = memberRepository.findByTenantIdWithRoleAndStatus(tenantId, memberStatus, pageable);
+        } else {
+            memberPage = memberRepository.findByTenantIdWithRole(tenantId, pageable);
+        }
+        
+        Page<MemberDto> dtoPage = memberPage.map(this::toDto);
+        
+        // Fetch share percentages from ShareCalculationService and enrich member DTOs
+        ShareCalculationDto shareCalc = shareCalculationService.calculateShares(tenantId);
+        Map<Long, BigDecimal> memberSharePercentages = new HashMap<>();
+        if (shareCalc.getMemberShares() != null) {
+            for (MemberShareDto share : shareCalc.getMemberShares()) {
+                memberSharePercentages.put(share.getMemberId(), share.getSharePercentage());
+            }
+        }
+        
+        // Update totalShares with share percentage from calculation
+        List<MemberDto> enrichedMembers = dtoPage.getContent().stream()
+                .map(dto -> {
+                    BigDecimal sharePercentage = memberSharePercentages.getOrDefault(dto.getId(), BigDecimal.ZERO);
+                    dto.setTotalShares(sharePercentage);
+                    return dto;
+                })
+                .collect(Collectors.toList());
+        
+        return PageResponse.from(dtoPage);
     }
 
     @Transactional(readOnly = true)
@@ -73,19 +147,53 @@ public class MemberService {
             role = roleRepository.findByNameAndTenantId("Member", tenantId).orElse(null);
         }
 
+        // Determine password based on mode
+        String plainPassword;
+        boolean mustChangePassword = false;
+        boolean shouldSendEmail = false;
+        
+        String passwordMode = request.getPasswordMode();
+        if ("default".equalsIgnoreCase(passwordMode)) {
+            // Use default password, require change on first login
+            plainPassword = EmailService.DEFAULT_PASSWORD;
+            mustChangePassword = true;
+            shouldSendEmail = false; // Don't send email for default password
+        } else if ("random".equalsIgnoreCase(passwordMode)) {
+            // Generate random password, send email
+            plainPassword = emailService.generateRandomPassword();
+            mustChangePassword = true;
+            shouldSendEmail = Boolean.TRUE.equals(request.getSendEmail());
+        } else {
+            // Backward compatible - use provided password
+            plainPassword = request.getPassword() != null ? request.getPassword() : "password123";
+            mustChangePassword = false;
+        }
+
         Member member = Member.builder()
                 .name(request.getName())
                 .phone(request.getPhone())
                 .email(request.getEmail())
-                .password(passwordEncoder.encode(request.getPassword() != null ? request.getPassword() : "password123"))
+                .password(passwordEncoder.encode(plainPassword))
                 .memberNo(memberNo)
                 .joinDate(LocalDate.now())
                 .status(Member.MemberStatus.ACTIVE)
                 .role(role)
                 .tenant(tenant)
+                .mustChangePassword(mustChangePassword)
                 .build();
 
         member = memberRepository.save(member);
+        
+        // Send welcome email with credentials if requested
+        if (shouldSendEmail && request.getEmail() != null && !request.getEmail().isEmpty()) {
+            emailService.sendWelcomeEmail(
+                    request.getEmail(),
+                    request.getName(),
+                    plainPassword,
+                    tenant.getName()
+            );
+        }
+
         return toDto(member);
     }
 
@@ -112,6 +220,70 @@ public class MemberService {
                 .orElseThrow(() -> new RuntimeException("Member not found"));
         member.setStatus(Member.MemberStatus.EXITED);
         memberRepository.save(member);
+    }
+
+    /**
+     * Hard delete a member and ALL related data across all modules.
+     * This permanently removes the member and all their:
+     * - Contributions
+     * - Loans and loan repayments
+     * - Fines
+     * - Penalties
+     * - Transactions
+     * - Welfare contributions
+     * - Merry-go-round contributions
+     * - Share entries
+     * - Payout records
+     * 
+     * WARNING: This action cannot be undone!
+     */
+    @Transactional
+    public void hardDeleteMember(Long id, Long tenantId) {
+        Member member = memberRepository.findByIdAndTenantId(id, tenantId)
+                .orElseThrow(() -> new RuntimeException("Member not found"));
+
+        log.warn("HARD DELETE: Permanently deleting member {} (ID: {}) and all related data", member.getName(), id);
+
+        // 1. Delete contributions
+        contributionRepository.deleteByMemberId(id);
+        log.info("Deleted contributions for member {}", id);
+
+        // 2. Delete loans (and their repayments via cascade or manual)
+        List<Loan> loans = loanRepository.findByMemberIdOrderByCreatedAtDesc(id);
+        for (Loan loan : loans) {
+            // Delete loan repayments first if not cascaded
+            // loanRepaymentRepository.deleteByLoanId(loan.getId());
+            loanRepository.delete(loan);
+        }
+        log.info("Deleted {} loans for member {}", loans.size(), id);
+
+        // 3. Delete fines (member fines from meetings)
+        fineRepository.deleteByMemberId(id);
+        log.info("Deleted fines for member {}", id);
+
+        // 4. Delete penalties
+        penaltyRepository.deleteByMemberId(id);
+        log.info("Deleted penalties for member {}", id);
+
+        // 5. Delete transactions referencing this member
+        transactionRepository.deleteByMemberId(id);
+        log.info("Deleted transactions for member {}", id);
+
+        // 6. Delete welfare contributions
+        welfareContributionRepository.deleteByMember(id);
+        log.info("Deleted welfare contributions for member {}", id);
+
+        // 7. Delete merry-go-round contributions
+        mgrContributionRepository.deleteByMemberId(id);
+        log.info("Deleted MGR contributions for member {}", id);
+
+        // 8. Delete payout member records
+        payoutMemberRepository.deleteByMemberId(id);
+        log.info("Deleted payout records for member {}", id);
+
+        // 9. Finally, delete the member
+        memberRepository.delete(member);
+        log.warn("HARD DELETE COMPLETE: Member {} (ID: {}) permanently deleted", member.getName(), id);
     }
 
     /**
@@ -372,6 +544,39 @@ public class MemberService {
                 // Net position
                 .netPosition(netPosition)
                 .build();
+    }
+    
+    /**
+     * Get paginated transactions for a member.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<TransactionDto> getMemberTransactionsPaginated(Long memberId, Long tenantId, String type, int page, int size) {
+        // Verify member belongs to tenant
+        memberRepository.findByIdAndTenantId(memberId, tenantId)
+                .orElseThrow(() -> new RuntimeException("Member not found"));
+        
+        if (size <= 0) size = 10;
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
+                page, size, org.springframework.data.domain.Sort.by("date").descending());
+        
+        org.springframework.data.domain.Page<Transaction> transactionPage;
+        
+        if (type != null && !type.equalsIgnoreCase("ALL") && !type.trim().isEmpty()) {
+            Transaction.TransactionType transactionType = Transaction.TransactionType.valueOf(type.toUpperCase());
+            transactionPage = transactionRepository.findByMemberIdAndType(memberId, transactionType, pageable);
+        } else {
+            transactionPage = transactionRepository.findByMemberIdOrderByDateDesc(memberId, pageable);
+        }
+        
+        org.springframework.data.domain.Page<TransactionDto> dtoPage = transactionPage.map(t -> TransactionDto.builder()
+                .id(t.getId())
+                .date(t.getDate().toString())
+                .type(t.getType().name())
+                .description(t.getDescription())
+                .amount(t.getAmount())
+                .direction(t.getDirection().name())
+                .build());
+        return PageResponse.from(dtoPage);
     }
 
     private MemberDto toDto(Member member) {

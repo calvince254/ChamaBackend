@@ -25,6 +25,7 @@ public class ShareSettingsDto {
     private Boolean includeLoanInterest;
     private Boolean includeInvestmentReturns;
     private Boolean includePenalties;
+    private Boolean includeProcessingFees;
     
     private String lastCalculatedAt;
 }

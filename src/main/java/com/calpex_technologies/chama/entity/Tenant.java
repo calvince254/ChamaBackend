@@ -43,6 +43,10 @@ public class Tenant extends BaseEntity {
     @Builder.Default
     private BigDecimal registrationFee = BigDecimal.ZERO;
 
+    @Column(name = "registration_fee_required")
+    @Builder.Default
+    private Boolean registrationFeeRequired = false;
+
     @Column(name = "min_members")
     @Builder.Default
     private Integer minMembers = 3;
@@ -54,6 +58,11 @@ public class Tenant extends BaseEntity {
     @Column(name = "signatures_required")
     @Builder.Default
     private Integer signaturesRequired = 2;
+
+    // Session timeout in minutes (0 = no timeout, default 30 minutes)
+    @Column(name = "session_timeout_minutes")
+    @Builder.Default
+    private Integer sessionTimeoutMinutes = 30;
 
     public enum TenantStatus {
         ACTIVE, SUSPENDED, PENDING

@@ -2,6 +2,7 @@ package com.calpex_technologies.chama.repository;
 
 import com.calpex_technologies.chama.entity.Fine;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -33,4 +34,8 @@ public interface FineRepository extends JpaRepository<Fine, Long> {
     BigDecimal getTotalUnpaidFinesForMember(@Param("memberId") Long memberId);
     
     long countByMeetingIdAndStatus(Long meetingId, Fine.FineStatus status);
+    
+    @Modifying
+    @Query("DELETE FROM Fine f WHERE f.member.id = :memberId")
+    void deleteByMemberId(@Param("memberId") Long memberId);
 }

@@ -2,6 +2,7 @@ package com.calpex_technologies.chama.service;
 
 import com.calpex_technologies.chama.dto.MeetingAttendeeDto;
 import com.calpex_technologies.chama.dto.MeetingDto;
+import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.RsvpRequest;
 import com.calpex_technologies.chama.entity.Meeting;
 import com.calpex_technologies.chama.entity.MeetingAttendance;
@@ -15,6 +16,10 @@ import com.calpex_technologies.chama.repository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.core.io.Resource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -39,11 +44,32 @@ public class MeetingService {
     private final FileStorageService fileStorageService;
     @Lazy
     private final PenaltyService penaltyService;
+    
+    private static final int DEFAULT_PAGE_SIZE = 10;
 
     public List<MeetingDto> getAllMeetings(Long tenantId) {
         return meetingRepository.findByTenantIdOrderByDateDesc(tenantId).stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
+    }
+    
+    /**
+     * Get meetings with pagination and optional search.
+     */
+    public PageResponse<MeetingDto> getMeetingsPaginated(Long tenantId, int page, int size, String search) {
+        if (size <= 0) size = DEFAULT_PAGE_SIZE;
+        Pageable pageable = PageRequest.of(page, size, Sort.by("date").descending());
+        
+        Page<Meeting> meetingPage;
+        
+        if (search != null && !search.trim().isEmpty()) {
+            meetingPage = meetingRepository.findByTenantIdAndSearch(tenantId, search.trim(), pageable);
+        } else {
+            meetingPage = meetingRepository.findByTenantIdOrderByDateDesc(tenantId, pageable);
+        }
+        
+        Page<MeetingDto> dtoPage = meetingPage.map(this::toDto);
+        return PageResponse.from(dtoPage);
     }
 
     public MeetingDto getMeeting(Long id, Long tenantId) {

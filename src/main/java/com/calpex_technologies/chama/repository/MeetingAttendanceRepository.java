@@ -36,5 +36,7 @@ public interface MeetingAttendanceRepository extends JpaRepository<MeetingAttend
     @Query("SELECT COUNT(ma) FROM MeetingAttendance ma WHERE ma.meeting.id = :meetingId AND ma.attended = true")
     long countActualAttendanceByMeetingId(Long meetingId);
     
+    int countByMeetingIdAndAttended(Long meetingId, boolean attended);
+    
     void deleteByMeeting(Meeting meeting);
 }

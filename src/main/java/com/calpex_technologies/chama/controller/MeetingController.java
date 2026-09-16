@@ -3,6 +3,7 @@ package com.calpex_technologies.chama.controller;
 import com.calpex_technologies.chama.dto.MeetingAttendeeDto;
 import com.calpex_technologies.chama.dto.MeetingDto;
 import com.calpex_technologies.chama.dto.MemberDto;
+import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.RsvpRequest;
 import com.calpex_technologies.chama.entity.Member;
 import com.calpex_technologies.chama.security.UserPrincipal;
@@ -29,6 +30,21 @@ public class MeetingController {
     @GetMapping
     public ResponseEntity<List<MeetingDto>> getAllMeetings(@AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(meetingService.getAllMeetings(principal.getTenantId()));
+    }
+    
+    /**
+     * Get meetings with pagination.
+     * Default: 10 items per page.
+     */
+    @GetMapping("/paginated")
+    public ResponseEntity<PageResponse<MeetingDto>> getMeetingsPaginated(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String search) {
+        PageResponse<MeetingDto> response = meetingService.getMeetingsPaginated(
+                principal.getTenantId(), page, size, search);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/{id}")

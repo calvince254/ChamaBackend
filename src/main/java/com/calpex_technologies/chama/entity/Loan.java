@@ -57,19 +57,44 @@ public class Loan extends TenantAwareEntity {
     @Builder.Default
     private BigDecimal totalPenalties = BigDecimal.ZERO;
 
+    // Processing fee tracking
+    @Column(name = "processing_fee", precision = 15, scale = 2)
+    @Builder.Default
+    private BigDecimal processingFee = BigDecimal.ZERO; // Calculated processing fee amount
+    
+    @Column(name = "processing_fee_paid", precision = 15, scale = 2)
+    @Builder.Default
+    private BigDecimal processingFeePaid = BigDecimal.ZERO; // For ON_REPAYMENT type tracking
+    
+    @Column(name = "net_disbursement_amount", precision = 15, scale = 2)
+    private BigDecimal netDisbursementAmount; // Actual amount given to member (principal - upfront fee)
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "processing_fee_deduction_type", length = 20)
+    private LoanProduct.ProcessingFeeDeduction processingFeeDeductionType; // Snapshot from product at loan creation
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default
     private LoanStatus status = LoanStatus.PENDING;
 
-    // Approval workflow tracking
+    // Guarantor approval tracking (Phase 1 - parallel)
+    @Column(name = "required_guarantors")
+    @Builder.Default
+    private Integer requiredGuarantors = 0; // Snapshot from product at loan creation
+    
+    @Column(name = "guarantors_approved_count")
+    @Builder.Default
+    private Integer guarantorsApprovedCount = 0; // How many guarantors have approved
+
+    // Approver approval tracking (Phase 2 - sequential)
     @Column(name = "current_approval_level")
     @Builder.Default
     private Integer currentApprovalLevel = 0; // 0 = not yet submitted for approval
 
     @Column(name = "required_approval_levels")
     @Builder.Default
-    private Integer requiredApprovalLevels = 1;
+    private Integer requiredApprovalLevels = 0; // 0 = no approvers needed
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "applied_by_id")
@@ -119,8 +144,9 @@ public class Loan extends TenantAwareEntity {
 
     public enum LoanStatus {
         DRAFT,              // Loan application started but not submitted
-        PENDING,            // Submitted, awaiting first approval
-        PENDING_APPROVAL,   // Awaiting approval at current level
+        PENDING_GUARANTORS, // Awaiting guarantor approvals (Phase 1 - parallel)
+        PENDING,            // Awaiting first approver (no guarantors or all guarantors approved)
+        PENDING_APPROVAL,   // Awaiting approval at current level (Phase 2 - sequential)
         APPROVED,           // All approvals complete, awaiting disbursement
         ACTIVE,             // Disbursed, repayment in progress
         OVERDUE,            // Has missed payment(s)
@@ -129,8 +155,23 @@ public class Loan extends TenantAwareEntity {
         REJECTED            // Rejected at any approval level
     }
 
+    // Helper method to check if all guarantors have approved
+    public boolean areAllGuarantorsApproved() {
+        return guarantorsApprovedCount >= requiredGuarantors;
+    }
+
     // Helper method to check if loan is fully approved
     public boolean isFullyApproved() {
-        return currentApprovalLevel >= requiredApprovalLevels;
+        return areAllGuarantorsApproved() && currentApprovalLevel >= requiredApprovalLevels;
+    }
+    
+    // Helper to check if loan needs guarantor approval
+    public boolean needsGuarantorApproval() {
+        return requiredGuarantors > 0 && guarantorsApprovedCount < requiredGuarantors;
+    }
+    
+    // Helper to check if loan needs approver approval
+    public boolean needsApproverApproval() {
+        return requiredApprovalLevels > 0 && currentApprovalLevel < requiredApprovalLevels;
     }
 }

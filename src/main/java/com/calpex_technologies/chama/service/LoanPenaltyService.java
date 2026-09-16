@@ -3,14 +3,17 @@ package com.calpex_technologies.chama.service;
 import com.calpex_technologies.chama.dto.LoanPenaltyDto;
 import com.calpex_technologies.chama.entity.LoanPenalty;
 import com.calpex_technologies.chama.entity.Member;
+import com.calpex_technologies.chama.entity.Transaction;
 import com.calpex_technologies.chama.repository.LoanPenaltyRepository;
 import com.calpex_technologies.chama.repository.MemberRepository;
+import com.calpex_technologies.chama.repository.TransactionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -24,6 +27,7 @@ public class LoanPenaltyService {
 
     private final LoanPenaltyRepository penaltyRepository;
     private final MemberRepository memberRepository;
+    private final TransactionRepository transactionRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -124,7 +128,26 @@ public class LoanPenaltyService {
             log.info("Penalty {} partially paid. {} of {} paid", id, newPaid, totalDue);
         }
 
-        return toDto(penaltyRepository.save(penalty));
+        penalty = penaltyRepository.save(penalty);
+        
+        // Create GL transaction for loan penalty payment
+        String description = String.format("Loan penalty payment - %s (%s)", 
+                penalty.getMember().getName(), penalty.getReason());
+        Transaction transaction = Transaction.builder()
+                .tenant(penalty.getTenant())
+                .date(LocalDate.now())
+                .type(Transaction.TransactionType.PENALTY)
+                .description(description)
+                .amount(amount)
+                .direction(Transaction.TransactionDirection.IN)
+                .member(penalty.getMember())
+                .referenceId(penalty.getId())
+                .referenceType("LOAN_PENALTY")
+                .build();
+        transactionRepository.save(transaction);
+        log.info("Created GL transaction for loan penalty payment: {} amount {}", id, amount);
+
+        return toDto(penalty);
     }
 
     /**

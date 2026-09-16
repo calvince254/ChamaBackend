@@ -52,6 +52,21 @@ public class PayoutController {
     public ResponseEntity<List<PayoutDto>> getPayouts(@AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(payoutService.getPayouts(principal.getTenantId()));
     }
+    
+    /**
+     * Get payouts with pagination.
+     * Default: 10 items per page.
+     */
+    @GetMapping("/paginated")
+    public ResponseEntity<PageResponse<PayoutDto>> getPayoutsPaginated(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        PageResponse<PayoutDto> response = payoutService.getPayoutsPaginated(
+                principal.getTenantId(), status, page, size);
+        return ResponseEntity.ok(response);
+    }
 
     /**
      * Get a single payout with member details

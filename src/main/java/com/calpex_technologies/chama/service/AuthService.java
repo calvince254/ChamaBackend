@@ -7,6 +7,7 @@ import com.calpex_technologies.chama.repository.MemberRepository;
 import com.calpex_technologies.chama.repository.TenantRepository;
 import com.calpex_technologies.chama.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -117,6 +118,55 @@ public class AuthService {
         return buildSuperAdminResponse(member);
     }
 
+    /**
+     * Change password for the currently authenticated user.
+     * Also clears the mustChangePassword flag after successful change.
+     */
+    @Transactional
+    public void changePassword(ChangePasswordRequest request) {
+        // Get current user from security context
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || authentication.getPrincipal() == null) {
+            throw new RuntimeException("Not authenticated");
+        }
+        
+        // Get member ID from UserPrincipal (set by JwtAuthenticationFilter)
+        Object principal = authentication.getPrincipal();
+        Long memberId;
+        if (principal instanceof com.calpex_technologies.chama.security.UserPrincipal userPrincipal) {
+            memberId = userPrincipal.getMemberId();
+        } else {
+            // Fallback to email lookup
+            String email = authentication.getName();
+            Member m = memberRepository.findByEmail(email)
+                    .orElseThrow(() -> new RuntimeException("User not found"));
+            memberId = m.getId();
+        }
+        
+        Member member = memberRepository.findById(memberId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        
+        // Verify current password
+        if (!passwordEncoder.matches(request.getCurrentPassword(), member.getPassword())) {
+            throw new RuntimeException("Current password is incorrect");
+        }
+        
+        // Verify new passwords match
+        if (!request.getNewPassword().equals(request.getConfirmPassword())) {
+            throw new RuntimeException("New passwords do not match");
+        }
+        
+        // Verify new password is different from current
+        if (passwordEncoder.matches(request.getNewPassword(), member.getPassword())) {
+            throw new RuntimeException("New password must be different from current password");
+        }
+        
+        // Update password
+        member.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        member.setMustChangePassword(false);
+        memberRepository.save(member);
+    }
+
     private AuthResponse buildSuperAdminResponse(Member member) {
         // Super admin gets FULL_ACCESS authority
         List<String> tokenPermissions = List.of("FULL_ACCESS");
@@ -142,8 +192,9 @@ public class AuthService {
                 .superAdmin(true)
                 .multiTenant(false)
                 .permissions(getFullPermissions())
-                .permissionCodes(tokenPermissions)  // Include permission codes
+                .permissionCodes(tokenPermissions)
                 .avatarInitials(getInitials(member.getName()))
+                .mustChangePassword(Boolean.TRUE.equals(member.getMustChangePassword()))
                 .build();
     }
 
@@ -197,8 +248,10 @@ public class AuthService {
                 .superAdmin(false)
                 .multiTenant(false)
                 .permissions(permissions)
-                .permissionCodes(tokenPermissions)  // New: permission codes from RolePermission
+                .permissionCodes(tokenPermissions)
                 .avatarInitials(getInitials(member.getName()))
+                .mustChangePassword(Boolean.TRUE.equals(member.getMustChangePassword()))
+                .sessionTimeoutMinutes(tenant.getSessionTimeoutMinutes())
                 .build();
     }
 

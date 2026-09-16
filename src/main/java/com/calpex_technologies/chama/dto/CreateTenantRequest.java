@@ -33,9 +33,22 @@ public class CreateTenantRequest {
     
     private String adminPhone;
     
-    @NotBlank(message = "Admin password is required")
+    // Password is optional when using passwordMode
     private String adminPassword;
     
     // Role name for the admin (Admin, Treasurer, Member) - defaults to Admin
     private String adminRoleName;
+    
+    /**
+     * Password generation mode for admin:
+     * - "default" = use 12345678, no email sent
+     * - "random" = generate random password, send email
+     * - null/empty = use provided adminPassword field (backward compatible)
+     */
+    private String passwordMode;
+    
+    /**
+     * Whether to send welcome email (only applies when passwordMode is "random")
+     */
+    private Boolean sendEmail;
 }

@@ -2,6 +2,8 @@ package com.calpex_technologies.chama.repository;
 
 import com.calpex_technologies.chama.entity.Payout;
 import com.calpex_technologies.chama.entity.Tenant;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -41,4 +43,12 @@ public interface PayoutRepository extends JpaRepository<Payout, Long> {
     
     @Modifying
     void deleteByTenant(Tenant tenant);
+    
+    // Paginated queries
+    Page<Payout> findByTenantIdOrderByCreatedAtDesc(Long tenantId, Pageable pageable);
+    
+    @Query("SELECT p FROM Payout p WHERE p.tenant.id = :tenantId AND p.status = :status ORDER BY p.createdAt DESC")
+    Page<Payout> findByTenantIdAndStatus(@Param("tenantId") Long tenantId, 
+                                          @Param("status") Payout.PayoutStatus status, 
+                                          Pageable pageable);
 }

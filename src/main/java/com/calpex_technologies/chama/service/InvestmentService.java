@@ -4,6 +4,9 @@ import com.calpex_technologies.chama.dto.*;
 import com.calpex_technologies.chama.entity.*;
 import com.calpex_technologies.chama.repository.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +25,7 @@ public class InvestmentService {
     private final InvestmentRepository investmentRepository;
     private final InvestmentValueHistoryRepository valueHistoryRepository;
     private final InvestmentApprovalRepository approvalRepository;
+    private final InvestmentTopupRepository investmentTopupRepository;
     private final MemberRepository memberRepository;
     private final TenantRepository tenantRepository;
     private final TransactionRepository transactionRepository;
@@ -30,6 +34,30 @@ public class InvestmentService {
         return investmentRepository.findByTenantIdOrderByDateInvestedDesc(tenantId).stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());
+    }
+
+    public Page<InvestmentDto> getInvestmentsPaginated(Long tenantId, int page, int size, String status, String approvalStatus) {
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Investment> investmentPage;
+        
+        boolean hasStatus = status != null && !status.isEmpty();
+        boolean hasApprovalStatus = approvalStatus != null && !approvalStatus.isEmpty();
+        
+        if (hasStatus && hasApprovalStatus) {
+            Investment.InvestmentStatus investmentStatus = Investment.InvestmentStatus.valueOf(status);
+            Investment.ApprovalStatus invApprovalStatus = Investment.ApprovalStatus.valueOf(approvalStatus);
+            investmentPage = investmentRepository.findByTenantIdAndStatusAndApprovalStatus(tenantId, investmentStatus, invApprovalStatus, pageable);
+        } else if (hasStatus) {
+            Investment.InvestmentStatus investmentStatus = Investment.InvestmentStatus.valueOf(status);
+            investmentPage = investmentRepository.findByTenantIdAndStatus(tenantId, investmentStatus, pageable);
+        } else if (hasApprovalStatus) {
+            Investment.ApprovalStatus invApprovalStatus = Investment.ApprovalStatus.valueOf(approvalStatus);
+            investmentPage = investmentRepository.findByTenantIdAndApprovalStatus(tenantId, invApprovalStatus, pageable);
+        } else {
+            investmentPage = investmentRepository.findByTenantIdOrderByDateInvestedDesc(tenantId, pageable);
+        }
+        
+        return investmentPage.map(this::toDto);
     }
 
     public InvestmentDto getInvestment(Long id, Long tenantId) {
@@ -247,12 +275,51 @@ public class InvestmentService {
             throw new RuntimeException("Cannot update value of a non-active investment");
         }
 
+        java.math.BigDecimal previousValue = investment.getCurrentValue();
+        java.math.BigDecimal newValue = request.getNewValue();
+        java.math.BigDecimal valueChange = newValue.subtract(previousValue);
+
         // Create value history entry
-        createValueHistoryEntry(investment, request.getNewValue(), investment.getCurrentValue(), request.getNotes());
+        createValueHistoryEntry(investment, newValue, previousValue, request.getNotes());
         
         // Update current value
-        investment.setCurrentValue(request.getNewValue());
+        investment.setCurrentValue(newValue);
         investment = investmentRepository.save(investment);
+        
+        // Create GL transaction for value change (interest/returns)
+        if (valueChange.compareTo(java.math.BigDecimal.ZERO) > 0) {
+            // Value increased - interest/returns earned
+            String description = String.format("Investment return: %s - %s", 
+                    investment.getName(), 
+                    request.getNotes() != null ? request.getNotes() : "Value appreciation");
+            Transaction transaction = Transaction.builder()
+                    .date(LocalDate.now())
+                    .type(Transaction.TransactionType.INVESTMENT_RETURN)
+                    .description(description)
+                    .amount(valueChange)
+                    .direction(Transaction.TransactionDirection.IN)
+                    .referenceId(investment.getId())
+                    .referenceType("INVESTMENT_RETURN")
+                    .tenant(investment.getTenant())
+                    .build();
+            transactionRepository.save(transaction);
+        } else if (valueChange.compareTo(java.math.BigDecimal.ZERO) < 0) {
+            // Value decreased - loss recorded
+            String description = String.format("Investment loss: %s - %s", 
+                    investment.getName(), 
+                    request.getNotes() != null ? request.getNotes() : "Value depreciation");
+            Transaction transaction = Transaction.builder()
+                    .date(LocalDate.now())
+                    .type(Transaction.TransactionType.INVESTMENT_RETURN)
+                    .description(description)
+                    .amount(valueChange.abs())
+                    .direction(Transaction.TransactionDirection.OUT)
+                    .referenceId(investment.getId())
+                    .referenceType("INVESTMENT_LOSS")
+                    .tenant(investment.getTenant())
+                    .build();
+            transactionRepository.save(transaction);
+        }
         
         return toDto(investment);
     }
@@ -334,6 +401,85 @@ public class InvestmentService {
         
         return valueHistoryRepository.findByInvestmentIdOrderByValueDateAsc(investmentId).stream()
                 .map(this::toHistoryDto)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public InvestmentDto topupInvestment(Long id, Long tenantId, Long memberId, TopupInvestmentRequest request) {
+        Investment investment = investmentRepository.findByIdAndTenantId(id, tenantId)
+                .orElseThrow(() -> new RuntimeException("Investment not found"));
+        
+        if (investment.getStatus() != Investment.InvestmentStatus.ACTIVE) {
+            throw new RuntimeException("Cannot add principal to a non-active investment");
+        }
+        
+        if (investment.getApprovalStatus() != Investment.ApprovalStatus.APPROVED) {
+            throw new RuntimeException("Investment must be approved before adding principal");
+        }
+
+        Member recordedBy = null;
+        String recordedByName = getCurrentUsername();
+        if (memberId != null) {
+            recordedBy = memberRepository.findById(memberId).orElse(null);
+            if (recordedBy != null) {
+                recordedByName = recordedBy.getName();
+            }
+        }
+
+        java.math.BigDecimal previousPrincipal = investment.getAmountInvested();
+        java.math.BigDecimal newPrincipal = previousPrincipal.add(request.getAmount());
+        LocalDate topupDate = request.getTopupDate() != null ? request.getTopupDate() : LocalDate.now();
+
+        // Create topup record
+        InvestmentTopup topup = InvestmentTopup.builder()
+                .investment(investment)
+                .amount(request.getAmount())
+                .topupDate(topupDate)
+                .previousPrincipal(previousPrincipal)
+                .newPrincipal(newPrincipal)
+                .notes(request.getNotes())
+                .recordedBy(recordedBy)
+                .recordedByName(recordedByName)
+                .recordedAt(LocalDateTime.now())
+                .build();
+        investmentTopupRepository.save(topup);
+
+        // Update investment's amountInvested (base amount)
+        investment.setAmountInvested(newPrincipal);
+        
+        // Also increase currentValue by the same amount (top-up adds to the value)
+        investment.setCurrentValue(investment.getCurrentValue().add(request.getAmount()));
+        
+        investment = investmentRepository.save(investment);
+
+        // Create value history entry for the top-up
+        createValueHistoryEntry(investment, investment.getCurrentValue(), 
+                investment.getCurrentValue().subtract(request.getAmount()), 
+                "Principal top-up: " + request.getAmount() + (request.getNotes() != null ? " - " + request.getNotes() : ""));
+
+        // Create transaction for the top-up
+        Transaction transaction = Transaction.builder()
+                .date(topupDate)
+                .type(Transaction.TransactionType.INVESTMENT)
+                .description("Investment Top-up: " + investment.getName())
+                .amount(request.getAmount())
+                .direction(Transaction.TransactionDirection.OUT)
+                .referenceId(investment.getId())
+                .referenceType("INVESTMENT_TOPUP")
+                .tenant(investment.getTenant())
+                .build();
+        transactionRepository.save(transaction);
+
+        return toDto(investment);
+    }
+
+    public List<InvestmentTopupDto> getTopupHistory(Long investmentId, Long tenantId) {
+        // Verify investment belongs to tenant
+        investmentRepository.findByIdAndTenantId(investmentId, tenantId)
+                .orElseThrow(() -> new RuntimeException("Investment not found"));
+        
+        return investmentTopupRepository.findByInvestmentIdOrderByTopupDateDesc(investmentId).stream()
+                .map(this::toTopupDto)
                 .collect(Collectors.toList());
     }
 
@@ -433,5 +579,20 @@ public class InvestmentService {
                 .notes(history.getNotes())
                 .recordedBy(history.getRecordedBy())
                 .build();
+    }
+
+    private InvestmentTopupDto toTopupDto(InvestmentTopup topup) {
+        InvestmentTopupDto dto = new InvestmentTopupDto();
+        dto.setId(topup.getId());
+        dto.setInvestmentId(topup.getInvestment().getId());
+        dto.setAmount(topup.getAmount());
+        dto.setTopupDate(topup.getTopupDate());
+        dto.setPreviousPrincipal(topup.getPreviousPrincipal());
+        dto.setNewPrincipal(topup.getNewPrincipal());
+        dto.setNotes(topup.getNotes());
+        dto.setRecordedById(topup.getRecordedBy() != null ? topup.getRecordedBy().getId() : null);
+        dto.setRecordedByName(topup.getRecordedByName());
+        dto.setRecordedAt(topup.getRecordedAt());
+        return dto;
     }
 }
