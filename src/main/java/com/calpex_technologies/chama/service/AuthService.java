@@ -2,8 +2,10 @@ package com.calpex_technologies.chama.service;
 
 import com.calpex_technologies.chama.dto.*;
 import com.calpex_technologies.chama.entity.Member;
+import com.calpex_technologies.chama.entity.PasswordHistory;
 import com.calpex_technologies.chama.entity.Tenant;
 import com.calpex_technologies.chama.repository.MemberRepository;
+import com.calpex_technologies.chama.repository.PasswordHistoryRepository;
 import com.calpex_technologies.chama.repository.TenantRepository;
 import com.calpex_technologies.chama.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -22,10 +25,11 @@ public class AuthService {
 
     private final MemberRepository memberRepository;
     private final TenantRepository tenantRepository;
+    private final PasswordHistoryRepository passwordHistoryRepository;
     private final JwtUtil jwtUtil;
     private final PasswordEncoder passwordEncoder;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AuthResponse login(LoginRequest request) {
         // Find all members by email (across all tenants)
         List<Member> members = memberRepository.findAllByEmail(request.getEmail());
@@ -49,6 +53,13 @@ public class AuthService {
 
         if (validMember.getStatus() != Member.MemberStatus.ACTIVE) {
             throw new RuntimeException("Account is not active");
+        }
+
+        // Handle first login - force password change
+        if (Boolean.TRUE.equals(validMember.getFirstLogin())) {
+            validMember.setMustChangePassword(true);
+            validMember.setFirstLogin(false);
+            memberRepository.save(validMember);
         }
 
         // Check if super admin (no tenant)
@@ -121,6 +132,7 @@ public class AuthService {
     /**
      * Change password for the currently authenticated user.
      * Also clears the mustChangePassword flag after successful change.
+     * Validates that new password is not one of the last 5 passwords used.
      */
     @Transactional
     public void changePassword(ChangePasswordRequest request) {
@@ -160,6 +172,25 @@ public class AuthService {
         if (passwordEncoder.matches(request.getNewPassword(), member.getPassword())) {
             throw new RuntimeException("New password must be different from current password");
         }
+        
+        // Check against last 5 passwords in history
+        List<PasswordHistory> passwordHistory = passwordHistoryRepository.findTop5ByMember_IdOrderByChangedAtDesc(memberId);
+        for (PasswordHistory ph : passwordHistory) {
+            if (passwordEncoder.matches(request.getNewPassword(), ph.getPasswordHash())) {
+                throw new RuntimeException("New password cannot be one of your last 5 passwords");
+            }
+        }
+        
+        // Save current password to history before changing
+        PasswordHistory history = PasswordHistory.builder()
+                .member(member)
+                .passwordHash(member.getPassword())
+                .changedAt(LocalDateTime.now())
+                .build();
+        passwordHistoryRepository.save(history);
+        
+        // Clean up old password history entries (keep only last 5)
+        passwordHistoryRepository.deleteOldEntriesKeepingLast5(memberId);
         
         // Update password
         member.setPassword(passwordEncoder.encode(request.getNewPassword()));

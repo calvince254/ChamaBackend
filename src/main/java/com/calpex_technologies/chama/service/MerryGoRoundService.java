@@ -14,7 +14,11 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -30,6 +34,8 @@ public class MerryGoRoundService {
     private final MerryGoRoundFineRepository fineRepository;
     private final MemberRepository memberRepository;
     private final TenantRepository tenantRepository;
+    private final PayableRepository payableRepository;
+    private final PaymentClaimRepository paymentClaimRepository;
 
     // ==================== CYCLES ====================
 
@@ -476,9 +482,8 @@ public class MerryGoRoundService {
             throw new RuntimeException("Round not found");
         }
 
-        return contributionRepository.findByRoundId(roundId).stream()
-                .map(this::toContributionDto)
-                .collect(Collectors.toList());
+        List<MerryGoRoundContribution> contributions = contributionRepository.findByRoundId(roundId);
+        return toContributionDtoListWithPendingClaims(contributions, tenantId);
     }
 
     public List<MerryGoRoundContributionDto> getContributionsByCycle(Long cycleId, Long tenantId) {
@@ -489,9 +494,8 @@ public class MerryGoRoundService {
             throw new RuntimeException("Cycle not found");
         }
 
-        return contributionRepository.findByCycleIdOrderByDueDateDesc(cycleId).stream()
-                .map(this::toContributionDto)
-                .collect(Collectors.toList());
+        List<MerryGoRoundContribution> contributions = contributionRepository.findByCycleIdOrderByDueDateDesc(cycleId);
+        return toContributionDtoListWithPendingClaims(contributions, tenantId);
     }
 
     @Transactional
@@ -544,9 +548,8 @@ public class MerryGoRoundService {
             throw new RuntimeException("Cycle not found");
         }
 
-        return fineRepository.findByCycleIdOrderByImposedDateDesc(cycleId).stream()
-                .map(this::toFineDto)
-                .collect(Collectors.toList());
+        List<MerryGoRoundFine> fines = fineRepository.findByCycleIdOrderByImposedDateDesc(cycleId);
+        return toFineDtoListWithPendingClaims(fines, tenantId);
     }
 
     @Transactional
@@ -616,6 +619,171 @@ public class MerryGoRoundService {
         fine.setWaiveReason(reason);
         fine.setWaivedBy(waivedBy);
         fine = fineRepository.save(fine);
+
+        return toFineDto(fine);
+    }
+
+    /**
+     * Get fines for the current member only in a specific cycle.
+     */
+    public List<MerryGoRoundFineDto> getMyFinesByCycle(Long cycleId, Long memberId, Long tenantId) {
+        MerryGoRoundCycle cycle = cycleRepository.findById(cycleId)
+                .orElseThrow(() -> new RuntimeException("Cycle not found"));
+        
+        if (!cycle.getTenant().getId().equals(tenantId)) {
+            throw new RuntimeException("Cycle not found");
+        }
+
+        List<MerryGoRoundFine> fines = fineRepository.findByMemberIdAndCycleId(memberId, cycleId);
+        return toFineDtoListWithPendingClaims(fines, tenantId);
+    }
+
+    /**
+     * Initiate payment for an MGR fine using the unified payment system.
+     */
+    @Transactional
+    public InitiatePaymentResponse initiateFinePayment(Long fineId, InitiatePaymentRequest request, Long memberId, Long tenantId) {
+        MerryGoRoundFine fine = fineRepository.findById(fineId)
+                .orElseThrow(() -> new RuntimeException("Fine not found"));
+
+        if (!fine.getCycle().getTenant().getId().equals(tenantId)) {
+            throw new RuntimeException("Fine not found");
+        }
+
+        // Verify the member is paying their own fine
+        if (!fine.getMember().getId().equals(memberId)) {
+            throw new RuntimeException("You can only pay your own fines");
+        }
+
+        if (fine.getStatus() != MerryGoRoundFine.FineStatus.PENDING) {
+            throw new RuntimeException("Fine is not pending payment");
+        }
+
+        // Check if there's already a pending payment claim
+        Optional<Payable> existingPayable = payableRepository.findByPayableTypeAndPayableRefIdAndTenant_Id(
+                PayableType.MGR_FINE, fineId, tenantId);
+        if (existingPayable.isPresent() && existingPayable.get().getStatus() == PayableStatus.AWAITING_CONFIRMATION) {
+            throw new RuntimeException("There is already a pending payment claim for this fine");
+        }
+
+        BigDecimal amount = request.getAmount() != null ? request.getAmount() : fine.getAmount();
+        
+        // Create or get Payable record
+        Payable payable = existingPayable.orElseGet(() -> {
+            Payable newPayable = Payable.builder()
+                    .payableType(PayableType.MGR_FINE)
+                    .payableRefId(fineId)
+                    .member(fine.getMember())
+                    .tenant(fine.getCycle().getTenant())
+                    .amount(fine.getAmount())
+                    .status(PayableStatus.OUTSTANDING)
+                    .description("MGR Fine: " + fine.getReason())
+                    .build();
+            return payableRepository.save(newPayable);
+        });
+
+        // Handle payment based on method
+        String paymentMethod = request.getPaymentMethod();
+        
+        if ("MANUAL".equals(paymentMethod)) {
+            // Create pending claim for admin verification
+            PaymentClaim claim = PaymentClaim.builder()
+                    .payable(payable)
+                    .payer(fine.getMember())
+                    .amount(amount)
+                    .referenceCode(request.getReferenceCode())
+                    .paymentMethod(PaymentMethod.MANUAL)
+                    .status(PaymentClaimStatus.MANUAL_REVIEW)
+                    .build();
+            paymentClaimRepository.save(claim);
+
+            payable.setStatus(PayableStatus.AWAITING_CONFIRMATION);
+            payableRepository.save(payable);
+
+            return InitiatePaymentResponse.builder()
+                    .status("PENDING_CONFIRMATION")
+                    .statusMessage("Payment claim submitted. Awaiting admin confirmation.")
+                    .awaitingVerification(true)
+                    .payableId(payable.getId())
+                    .build();
+        } else if ("STK_PUSH".equals(paymentMethod)) {
+            // For STK Push - would integrate with M-PESA here
+            // For now, return a pending status
+            return InitiatePaymentResponse.builder()
+                    .status("STK_INITIATED")
+                    .statusMessage("M-PESA prompt sent to " + request.getPhoneNumber())
+                    .awaitingVerification(false)
+                    .payableId(payable.getId())
+                    .build();
+        } else if ("IN_APP_SMS".equals(paymentMethod)) {
+            // Create pending claim for SMS verification
+            PaymentClaim claim = PaymentClaim.builder()
+                    .payable(payable)
+                    .payer(fine.getMember())
+                    .amount(amount)
+                    .paymentMethod(PaymentMethod.IN_APP_SMS)
+                    .status(PaymentClaimStatus.PENDING_SMS)
+                    .build();
+            paymentClaimRepository.save(claim);
+
+            payable.setStatus(PayableStatus.AWAITING_CONFIRMATION);
+            payableRepository.save(payable);
+
+            return InitiatePaymentResponse.builder()
+                    .status("PENDING_CONFIRMATION")
+                    .statusMessage("Payment claim submitted. Awaiting SMS verification.")
+                    .awaitingVerification(true)
+                    .payableId(payable.getId())
+                    .build();
+        }
+
+        throw new RuntimeException("Unsupported payment method: " + paymentMethod);
+    }
+
+    /**
+     * Admin records a direct payment for an MGR fine.
+     */
+    @Transactional
+    public MerryGoRoundFineDto recordFinePayment(Long fineId, BigDecimal amount, Long tenantId) {
+        MerryGoRoundFine fine = fineRepository.findById(fineId)
+                .orElseThrow(() -> new RuntimeException("Fine not found"));
+
+        if (!fine.getCycle().getTenant().getId().equals(tenantId)) {
+            throw new RuntimeException("Fine not found");
+        }
+
+        if (fine.getStatus() != MerryGoRoundFine.FineStatus.PENDING) {
+            throw new RuntimeException("Fine is not pending payment");
+        }
+
+        // Extract values before reassignment for use in lambda
+        final Member fineMember = fine.getMember();
+        final Tenant fineTenant = fine.getCycle().getTenant();
+        final BigDecimal fineAmount = fine.getAmount();
+        final String fineReason = fine.getReason();
+
+        // Mark fine as paid
+        fine.setStatus(MerryGoRoundFine.FineStatus.PAID);
+        fine.setPaidDate(LocalDate.now());
+        fine = fineRepository.save(fine);
+
+        // Update or create Payable record
+        Payable payable = payableRepository.findByPayableTypeAndPayableRefIdAndTenant_Id(
+                PayableType.MGR_FINE, fineId, tenantId)
+                .orElseGet(() -> Payable.builder()
+                        .payableType(PayableType.MGR_FINE)
+                        .payableRefId(fineId)
+                        .member(fineMember)
+                        .tenant(fineTenant)
+                        .amount(fineAmount)
+                        .status(PayableStatus.OUTSTANDING)
+                        .description("MGR Fine: " + fineReason)
+                        .build());
+        
+        payable.setStatus(PayableStatus.PAID);
+        payableRepository.save(payable);
+
+        log.info("Admin recorded payment for MGR fine {}, amount: {}", fineId, amount);
 
         return toFineDto(fine);
     }
@@ -929,6 +1097,28 @@ public class MerryGoRoundService {
         // Check if a fine exists for this contribution
         boolean hasFine = fineRepository.existsByContributionId(contribution.getId());
         
+        // For single contribution lookup, do individual query
+        boolean hasPendingClaim = false;
+        Long payableId = null;
+        if (contribution.getStatus() != MerryGoRoundContribution.ContributionStatus.PAID) {
+            var payableOpt = payableRepository.findByPayableTypeAndPayableRefId(PayableType.MGR_CONTRIBUTION, contribution.getId());
+            if (payableOpt.isPresent()) {
+                var payable = payableOpt.get();
+                hasPendingClaim = payable.getStatus() == PayableStatus.AWAITING_CONFIRMATION;
+                if (hasPendingClaim) {
+                    payableId = payable.getId();
+                }
+            }
+        }
+        
+        return toContributionDto(contribution, hasFine, hasPendingClaim, payableId);
+    }
+    
+    private MerryGoRoundContributionDto toContributionDto(MerryGoRoundContribution contribution, boolean hasFine, boolean hasPendingClaim) {
+        return toContributionDto(contribution, hasFine, hasPendingClaim, null);
+    }
+    
+    private MerryGoRoundContributionDto toContributionDto(MerryGoRoundContribution contribution, boolean hasFine, boolean hasPendingClaim, Long payableId) {
         // Get round info for better display
         MerryGoRoundRound round = contribution.getRound();
         
@@ -947,7 +1137,47 @@ public class MerryGoRoundService {
                 .paymentReference(contribution.getPaymentReference())
                 .isOverdue(contribution.isOverdue())
                 .hasFine(hasFine)
+                .hasPendingClaim(hasPendingClaim)
+                .payableId(payableId)
                 .build();
+    }
+    
+    /**
+     * Convert list of contributions to DTOs with batch pending claim lookup.
+     */
+    private List<MerryGoRoundContributionDto> toContributionDtoListWithPendingClaims(List<MerryGoRoundContribution> contributions, Long tenantId) {
+        if (contributions.isEmpty()) return List.of();
+        
+        // Batch fetch which contributions have fines
+        Set<Long> contributionIdsWithFines = contributions.stream()
+                .map(MerryGoRoundContribution::getId)
+                .filter(fineRepository::existsByContributionId)
+                .collect(java.util.stream.Collectors.toSet());
+        
+        // Get IDs of unpaid contributions
+        List<Long> unpaidIds = contributions.stream()
+                .filter(c -> c.getStatus() != MerryGoRoundContribution.ContributionStatus.PAID)
+                .map(MerryGoRoundContribution::getId)
+                .collect(Collectors.toList());
+        
+        // Batch fetch payables with pending claims - get full entities to extract payableId
+        Map<Long, Long> pendingClaimPayableIds = new HashMap<>();
+        if (!unpaidIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.MGR_CONTRIBUTION, unpaidIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : pendingPayables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
+        
+        List<MerryGoRoundContributionDto> result = new ArrayList<>();
+        for (MerryGoRoundContribution c : contributions) {
+            boolean hasFine = contributionIdsWithFines.contains(c.getId());
+            boolean hasPendingClaim = pendingClaimPayableIds.containsKey(c.getId());
+            Long payableId = pendingClaimPayableIds.get(c.getId());
+            result.add(toContributionDto(c, hasFine, hasPendingClaim, payableId));
+        }
+        return result;
     }
 
     private MerryGoRoundFineDto toFineDto(MerryGoRoundFine fine) {
@@ -965,6 +1195,56 @@ public class MerryGoRoundService {
                 .autoImposed(fine.getAutoImposed())
                 .waivedBy(fine.getWaivedBy())
                 .waiveReason(fine.getWaiveReason())
+                .hasPendingClaim(false) // Will be updated in batch lookup
+                .payableId(null) // Will be updated in batch lookup
                 .build();
+    }
+
+    /**
+     * Convert fines to DTOs with batch pending claim lookup.
+     */
+    private List<MerryGoRoundFineDto> toFineDtoListWithPendingClaims(List<MerryGoRoundFine> fines, Long tenantId) {
+        if (fines.isEmpty()) return List.of();
+        
+        // Get IDs of pending fines
+        List<Long> pendingIds = fines.stream()
+                .filter(f -> f.getStatus() == MerryGoRoundFine.FineStatus.PENDING)
+                .map(MerryGoRoundFine::getId)
+                .collect(Collectors.toList());
+        
+        // Batch fetch payables with pending claims
+        Map<Long, Long> pendingClaimPayableIds = new HashMap<>();
+        if (!pendingIds.isEmpty()) {
+            List<Payable> payables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.MGR_FINE, pendingIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : payables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
+        
+        return fines.stream()
+                .map(fine -> {
+                    boolean hasPendingClaim = pendingClaimPayableIds.containsKey(fine.getId());
+                    Long payableId = pendingClaimPayableIds.get(fine.getId());
+                    
+                    return MerryGoRoundFineDto.builder()
+                            .id(fine.getId())
+                            .cycleId(fine.getCycle().getId())
+                            .memberId(fine.getMember().getId())
+                            .memberName(fine.getMember().getName())
+                            .contributionId(fine.getContribution() != null ? fine.getContribution().getId() : null)
+                            .reason(fine.getReason())
+                            .amount(fine.getAmount())
+                            .imposedDate(fine.getImposedDate().toString())
+                            .paidDate(fine.getPaidDate() != null ? fine.getPaidDate().toString() : null)
+                            .status(fine.getStatus().name())
+                            .autoImposed(fine.getAutoImposed())
+                            .waivedBy(fine.getWaivedBy())
+                            .waiveReason(fine.getWaiveReason())
+                            .hasPendingClaim(hasPendingClaim)
+                            .payableId(payableId)
+                            .build();
+                })
+                .collect(Collectors.toList());
     }
 }

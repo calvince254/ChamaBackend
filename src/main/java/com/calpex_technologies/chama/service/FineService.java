@@ -13,6 +13,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
@@ -26,27 +27,57 @@ public class FineService {
     private final MemberRepository memberRepository;
     private final TenantRepository tenantRepository;
     private final TransactionRepository transactionRepository;
+    private final PayableRepository payableRepository;
+    private final PaymentClaimRepository paymentClaimRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     public List<FineDto> getMeetingFines(Long tenantId, Long meetingId) {
-        return fineRepository.findByTenantIdAndMeetingId(tenantId, meetingId)
-                .stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<Fine> fines = fineRepository.findByTenantIdAndMeetingId(tenantId, meetingId);
+        return toDtoListWithPendingClaims(fines, tenantId);
     }
 
     public List<FineDto> getMemberFines(Long tenantId, Long memberId) {
-        return fineRepository.findByTenantIdAndMemberId(tenantId, memberId)
-                .stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<Fine> fines = fineRepository.findByTenantIdAndMemberId(tenantId, memberId);
+        return toDtoListWithPendingClaims(fines, tenantId);
     }
 
     public List<FineDto> getMemberMeetingFines(Long meetingId, Long memberId) {
-        return fineRepository.findByMeetingIdAndMemberId(meetingId, memberId)
-                .stream()
-                .map(this::toDto)
+        List<Fine> fines = fineRepository.findByMeetingIdAndMemberId(meetingId, memberId);
+        if (fines.isEmpty()) return List.of();
+        Long tenantId = fines.get(0).getTenant().getId();
+        return toDtoListWithPendingClaims(fines, tenantId);
+    }
+    
+    /**
+     * Convert list of fines to DTOs with batch pending claim lookup.
+     * This avoids N+1 queries by fetching all pending claims in a single query.
+     */
+    private List<FineDto> toDtoListWithPendingClaims(List<Fine> fines, Long tenantId) {
+        if (fines.isEmpty()) return List.of();
+        
+        // Get IDs of unpaid fines to check for pending claims
+        List<Long> unpaidFineIds = fines.stream()
+                .filter(f -> f.getStatus() != Fine.FineStatus.PAID && f.getStatus() != Fine.FineStatus.WAIVED)
+                .map(Fine::getId)
+                .collect(Collectors.toList());
+        
+        // Batch fetch payables with pending claims (maps refId -> payableId)
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        if (!unpaidFineIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.MEETING_FINE, unpaidFineIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : pendingPayables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
+        
+        return fines.stream()
+                .map(fine -> {
+                    boolean hasPending = pendingClaimPayableIds.containsKey(fine.getId());
+                    Long payableId = hasPending ? pendingClaimPayableIds.get(fine.getId()) : null;
+                    return toDto(fine, hasPending, payableId);
+                })
                 .collect(Collectors.toList());
     }
 
@@ -250,6 +281,28 @@ public class FineService {
     }
 
     private FineDto toDto(Fine fine) {
+        // For single fine lookup (used by impose/pay operations), check Payable status
+        boolean hasPendingClaim = false;
+        Long payableId = null;
+        if (fine.getStatus() != Fine.FineStatus.PAID && fine.getStatus() != Fine.FineStatus.WAIVED) {
+            var payableOpt = payableRepository.findByPayableTypeAndPayableRefIdAndTenant_Id(
+                    PayableType.MEETING_FINE, fine.getId(), fine.getTenant().getId());
+            if (payableOpt.isPresent()) {
+                Payable payable = payableOpt.get();
+                hasPendingClaim = payable.getStatus() == PayableStatus.AWAITING_CONFIRMATION;
+                if (hasPendingClaim) {
+                    payableId = payable.getId();
+                }
+            }
+        }
+        return toDto(fine, hasPendingClaim, payableId);
+    }
+    
+    private FineDto toDto(Fine fine, boolean hasPendingClaim) {
+        return toDto(fine, hasPendingClaim, null);
+    }
+    
+    private FineDto toDto(Fine fine, boolean hasPendingClaim, Long payableId) {
         return FineDto.builder()
                 .id(fine.getId())
                 .meetingId(fine.getMeeting().getId())
@@ -265,6 +318,8 @@ public class FineService {
                 .imposedByName(fine.getImposedBy() != null ? fine.getImposedBy().getName() : null)
                 .paidAt(fine.getPaidAt() != null ? fine.getPaidAt().format(DATE_FORMATTER) : null)
                 .paidAmount(fine.getPaidAmount())
+                .hasPendingClaim(hasPendingClaim)
+                .payableId(payableId)
                 .build();
     }
 }

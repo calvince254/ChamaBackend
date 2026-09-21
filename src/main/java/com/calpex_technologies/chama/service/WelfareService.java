@@ -17,6 +17,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -32,6 +34,8 @@ public class WelfareService {
     private final ContributionRepository contributionRepository;
     private final ContributionTypeRepository contributionTypeRepository;
     private final TransactionRepository transactionRepository;
+    private final PayableRepository payableRepository;
+    private final PaymentClaimRepository paymentClaimRepository;
 
     public List<WelfareEventDto> getAllWelfareEvents(Long tenantId) {
         return welfareEventRepository.findByTenantIdOrderByDateReportedDesc(tenantId).stream()
@@ -61,6 +65,17 @@ public class WelfareService {
 
     @Transactional
     public WelfareEventDto createWelfareEvent(WelfareEventDto dto, Long tenantId) {
+        // Validate required fields
+        if (dto.getAmountPerMember() == null) {
+            throw new RuntimeException("Amount per member is required");
+        }
+        if (dto.getMemberId() == null) {
+            throw new RuntimeException("Beneficiary member is required");
+        }
+        if (dto.getEventType() == null || dto.getEventType().isEmpty()) {
+            throw new RuntimeException("Event type is required");
+        }
+        
         Tenant tenant = tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new RuntimeException("Tenant not found"));
 
@@ -152,9 +167,8 @@ public class WelfareService {
         welfareEventRepository.findByIdAndTenantId(eventId, tenantId)
                 .orElseThrow(() -> new RuntimeException("Welfare event not found"));
 
-        return welfareContributionRepository.findByWelfareEventIdAndTenantId(eventId, tenantId).stream()
-                .map(this::toContributionDto)
-                .collect(Collectors.toList());
+        List<WelfareContribution> contributions = welfareContributionRepository.findByWelfareEventIdAndTenantId(eventId, tenantId);
+        return toContributionDtoListWithPendingClaims(contributions, tenantId);
     }
 
     @Transactional
@@ -419,6 +433,27 @@ public class WelfareService {
     }
 
     private WelfareContributionDto toContributionDto(WelfareContribution contribution) {
+        // For single contribution lookup, do individual query
+        boolean hasPendingClaim = false;
+        Long payableId = null;
+        if (contribution.getPaid() == null || !contribution.getPaid()) {
+            var payableOpt = payableRepository.findByPayableTypeAndPayableRefId(PayableType.WELFARE_DUE, contribution.getId());
+            if (payableOpt.isPresent()) {
+                var payable = payableOpt.get();
+                hasPendingClaim = payable.getStatus() == PayableStatus.AWAITING_CONFIRMATION;
+                if (hasPendingClaim) {
+                    payableId = payable.getId();
+                }
+            }
+        }
+        return toContributionDto(contribution, hasPendingClaim, payableId);
+    }
+    
+    private WelfareContributionDto toContributionDto(WelfareContribution contribution, boolean hasPendingClaim) {
+        return toContributionDto(contribution, hasPendingClaim, null);
+    }
+    
+    private WelfareContributionDto toContributionDto(WelfareContribution contribution, boolean hasPendingClaim, Long payableId) {
         WelfareContributionDto.WelfareContributionDtoBuilder builder = WelfareContributionDto.builder()
                 .id(contribution.getId())
                 .welfareEventId(contribution.getWelfareEvent().getId())
@@ -431,7 +466,9 @@ public class WelfareService {
                 .paidDate(contribution.getPaidDate() != null ? contribution.getPaidDate().toString() : null)
                 .paymentReference(contribution.getPaymentReference())
                 .paidFromContribution(contribution.getPaidFromContribution())
-                .paymentMethod(contribution.getPaymentMethod() != null ? contribution.getPaymentMethod().name() : null);
+                .paymentMethod(contribution.getPaymentMethod() != null ? contribution.getPaymentMethod().name() : null)
+                .hasPendingClaim(hasPendingClaim)
+                .payableId(payableId);
 
         if (contribution.getSourceContributionType() != null) {
             builder.sourceContributionTypeId(contribution.getSourceContributionType().getId())
@@ -442,6 +479,37 @@ public class WelfareService {
         }
 
         return builder.build();
+    }
+    
+    /**
+     * Convert list of welfare contributions to DTOs with batch pending claim lookup.
+     */
+    private List<WelfareContributionDto> toContributionDtoListWithPendingClaims(List<WelfareContribution> contributions, Long tenantId) {
+        if (contributions.isEmpty()) return List.of();
+        
+        // Get IDs of unpaid contributions
+        List<Long> unpaidIds = contributions.stream()
+                .filter(c -> c.getPaid() == null || !c.getPaid())
+                .map(WelfareContribution::getId)
+                .collect(Collectors.toList());
+        
+        // Batch fetch payable IDs with pending claims
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        if (!unpaidIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.WELFARE_DUE, unpaidIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : pendingPayables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
+        
+        return contributions.stream()
+                .map(c -> {
+                    boolean hasPendingClaim = pendingClaimPayableIds.containsKey(c.getId());
+                    Long payableId = pendingClaimPayableIds.get(c.getId());
+                    return toContributionDto(c, hasPendingClaim, payableId);
+                })
+                .collect(Collectors.toList());
     }
 
     // Inner DTO for contribution balances

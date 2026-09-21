@@ -34,11 +34,12 @@ public class PayoutService {
 
     /**
      * Calculate the liquidity breakdown for a tenant.
-     * Shows what's available as cash vs locked in investments/loans.
+     * Liquid Cash = Total Pool Value - Locked Investments - Outstanding Loans
+     * This uses the same calculation as the share calculation service for consistency.
      */
     @Transactional(readOnly = true)
     public LiquidityDto calculateLiquidity(Long tenantId) {
-        // Get total pool value from share calculation
+        // Get total pool value from share calculation (uses the configured rules in settings)
         ShareCalculationDto shareCalc = shareCalculationService.calculateShares(tenantId);
         BigDecimal totalPoolValue = shareCalc.getTotalPoolValue();
 
@@ -48,11 +49,12 @@ public class PayoutService {
         // Calculate locked in investments (active investments at current value)
         BigDecimal lockedInInvestments = calculateLockedInvestments(tenantId);
 
-        // Liquid cash = Total Pool - Outstanding Loans - Locked Investments
-        // This is simplified; in reality, you'd track actual bank balance
+        // Liquid cash = Total Pool Value - Locked Investments - Outstanding Loans
+        // Outstanding loans represent money that was disbursed from the pool and hasn't been returned yet
+        // Locked investments represent money that was invested and can't be withdrawn yet
         BigDecimal liquidCash = totalPoolValue
-                .subtract(outstandingLoans)
-                .subtract(lockedInInvestments);
+                .subtract(lockedInInvestments)
+                .subtract(outstandingLoans);
         
         // Ensure liquid cash is not negative
         if (liquidCash.compareTo(BigDecimal.ZERO) < 0) {
@@ -116,6 +118,69 @@ public class PayoutService {
         return locked;
     }
 
+    /**
+     * Calculate how much a member is liable for as a guarantor.
+     * This is the total outstanding balance of loans they have guaranteed
+     * that are still active/overdue and not fully paid.
+     */
+    private BigDecimal calculateGuarantorLiability(Long memberId, Long tenantId) {
+        // Find all active/overdue loans with guarantors eagerly fetched
+        List<Loan> activeLoans = loanRepository.findActiveLoansWithGuarantors(tenantId).stream()
+                .filter(l -> l.getGuarantors() != null && 
+                        l.getGuarantors().stream().anyMatch(g -> g.getId().equals(memberId)))
+                .collect(Collectors.toList());
+
+        BigDecimal totalLiability = BigDecimal.ZERO;
+        for (Loan loan : activeLoans) {
+            BigDecimal outstanding = loan.getBalanceOutstanding() != null 
+                    ? loan.getBalanceOutstanding() : BigDecimal.ZERO;
+            
+            // Divide liability among all guarantors
+            int guarantorCount = loan.getGuarantors() != null ? loan.getGuarantors().size() : 1;
+            if (guarantorCount > 0 && outstanding.compareTo(BigDecimal.ZERO) > 0) {
+                // Each guarantor is liable for their share of the outstanding balance
+                BigDecimal memberLiability = outstanding.divide(
+                        BigDecimal.valueOf(guarantorCount), 2, RoundingMode.HALF_UP);
+                totalLiability = totalLiability.add(memberLiability);
+            }
+        }
+        
+        return totalLiability;
+    }
+
+    /**
+     * Get details of loans where member is a guarantor (for UI display)
+     */
+    @Transactional(readOnly = true)
+    public List<GuarantorLiabilityDto> getGuarantorLiabilities(Long memberId, Long tenantId) {
+        // Use query with eager fetch to avoid lazy loading issues
+        List<Loan> activeLoans = loanRepository.findActiveLoansWithGuarantors(tenantId).stream()
+                .filter(l -> l.getGuarantors() != null && 
+                        l.getGuarantors().stream().anyMatch(g -> g.getId().equals(memberId)))
+                .collect(Collectors.toList());
+
+        List<GuarantorLiabilityDto> liabilities = new ArrayList<>();
+        for (Loan loan : activeLoans) {
+            BigDecimal outstanding = loan.getBalanceOutstanding() != null 
+                    ? loan.getBalanceOutstanding() : BigDecimal.ZERO;
+            int guarantorCount = loan.getGuarantors() != null ? loan.getGuarantors().size() : 1;
+            BigDecimal memberLiability = guarantorCount > 0 
+                    ? outstanding.divide(BigDecimal.valueOf(guarantorCount), 2, RoundingMode.HALF_UP)
+                    : outstanding;
+
+            liabilities.add(GuarantorLiabilityDto.builder()
+                    .loanId(loan.getId())
+                    .borrowerName(loan.getMember().getName())
+                    .loanAmount(loan.getTotalAmount())
+                    .balanceOutstanding(outstanding)
+                    .memberLiability(memberLiability)
+                    .guarantorCount(guarantorCount)
+                    .loanStatus(loan.getStatus().name())
+                    .build());
+        }
+        return liabilities;
+    }
+
     // ==================== PAYOUT PREVIEW ====================
 
     /**
@@ -123,7 +188,8 @@ public class PayoutService {
      * Shows how much each member would receive based on current share percentages.
      */
     @Transactional(readOnly = true)
-    public PayoutPreviewDto previewPayout(Long tenantId, Payout.PayoutType payoutType, BigDecimal amount, Long memberId) {
+    public PayoutPreviewDto previewPayout(Long tenantId, Payout.PayoutType payoutType, BigDecimal amount, 
+                                          Long memberId, Boolean useOwnershipDistribution, BigDecimal distributionPercentage) {
         ShareCalculationDto shareCalc = shareCalculationService.calculateShares(tenantId);
         LiquidityDto liquidity = calculateLiquidity(tenantId);
 
@@ -134,7 +200,15 @@ public class PayoutService {
         List<MemberShareDto> memberShares = shareCalc.getMemberShares();
         List<PayoutMemberPreviewDto> memberPreviews = new ArrayList<>();
 
-        BigDecimal payoutAmount = amount != null ? amount : liquidity.getLiquidCash();
+        // Default values
+        boolean ownershipBased = useOwnershipDistribution != null && useOwnershipDistribution;
+        BigDecimal percentage = distributionPercentage != null ? distributionPercentage : BigDecimal.valueOf(100);
+        
+        // Validate percentage is between 1 and 100
+        if (percentage.compareTo(BigDecimal.ONE) < 0) percentage = BigDecimal.ONE;
+        if (percentage.compareTo(BigDecimal.valueOf(100)) > 0) percentage = BigDecimal.valueOf(100);
+
+        BigDecimal payoutAmount = BigDecimal.ZERO;
 
         if (payoutType == Payout.PayoutType.INDIVIDUAL_WITHDRAWAL && memberId != null) {
             // Individual withdrawal - only one member
@@ -157,8 +231,45 @@ public class PayoutService {
                     .build());
 
             payoutAmount = memberPayout;
+        } else if (ownershipBased) {
+            // Ownership-based distribution: each member gets X% of their estimated value
+            for (MemberShareDto memberShare : memberShares) {
+                if (memberShare.getSharePercentage().compareTo(BigDecimal.ZERO) == 0) {
+                    continue; // Skip members with 0% share
+                }
+
+                // Calculate member's payout as percentage of their value
+                BigDecimal memberValue = memberShare.getMemberValue() != null ? memberShare.getMemberValue() : BigDecimal.ZERO;
+                BigDecimal memberPayout = memberValue
+                        .multiply(percentage)
+                        .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+
+                memberPreviews.add(PayoutMemberPreviewDto.builder()
+                        .memberId(memberShare.getMemberId())
+                        .memberName(memberShare.getMemberName())
+                        .sharePercentage(memberShare.getSharePercentage())
+                        .contributionAmount(memberShare.getContributionAmount())
+                        .payoutAmount(memberPayout)
+                        .build());
+                
+                payoutAmount = payoutAmount.add(memberPayout);
+            }
+            
+            // Cap at liquid cash if needed
+            if (payoutAmount.compareTo(liquidity.getLiquidCash()) > 0) {
+                // Scale down proportionally
+                BigDecimal scaleFactor = liquidity.getLiquidCash().divide(payoutAmount, 6, RoundingMode.HALF_UP);
+                payoutAmount = BigDecimal.ZERO;
+                for (PayoutMemberPreviewDto preview : memberPreviews) {
+                    BigDecimal scaledPayout = preview.getPayoutAmount().multiply(scaleFactor).setScale(2, RoundingMode.HALF_UP);
+                    preview.setPayoutAmount(scaledPayout);
+                    payoutAmount = payoutAmount.add(scaledPayout);
+                }
+            }
         } else {
-            // Full or partial distribution to all members
+            // Fixed amount distribution: distribute total amount based on share percentages
+            payoutAmount = amount != null ? amount : liquidity.getLiquidCash();
+            
             for (MemberShareDto memberShare : memberShares) {
                 if (memberShare.getSharePercentage().compareTo(BigDecimal.ZERO) == 0) {
                     continue; // Skip members with 0% share
@@ -184,7 +295,7 @@ public class PayoutService {
         boolean canProceed = payoutAmount.compareTo(liquidity.getLiquidCash()) <= 0;
         String warning = null;
         if (!canProceed) {
-            warning = "Payout amount exceeds available liquid cash. You may need to sell investments or recall loans.";
+            warning = "Payout amount exceeds available liquid cash. Amount will be capped at available cash.";
         }
 
         return PayoutPreviewDto.builder()
@@ -193,7 +304,7 @@ public class PayoutService {
                 .memberCount(memberPreviews.size())
                 .memberPreviews(memberPreviews)
                 .liquidity(liquidity)
-                .canProceed(canProceed)
+                .canProceed(canProceed || ownershipBased) // Ownership-based can always proceed (auto-caps)
                 .warning(warning)
                 .build();
     }
@@ -223,6 +334,25 @@ public class PayoutService {
 
         LiquidityDto liquidity = calculateLiquidity(tenantId);
 
+        // ========== VALIDATION: Check payout amount against available funds ==========
+        BigDecimal requestedAmount = request.getAmount();
+        
+        // For all payout types, validate against liquid cash
+        if (requestedAmount != null && requestedAmount.compareTo(liquidity.getLiquidCash()) > 0) {
+            throw new RuntimeException(String.format(
+                    "Payout amount (KES %,.2f) exceeds available liquid cash (KES %,.2f). " +
+                    "Note: Outstanding loans and locked investments cannot be distributed.",
+                    requestedAmount, liquidity.getLiquidCash()));
+        }
+        
+        // For full distribution, use liquid cash as the amount
+        if (request.getPayoutType() == Payout.PayoutType.FULL_DISTRIBUTION) {
+            if (liquidity.getLiquidCash().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new RuntimeException("No liquid cash available for distribution");
+            }
+            requestedAmount = liquidity.getLiquidCash();
+        }
+
         // Create payout
         Payout payout = Payout.builder()
                 .tenant(tenant)
@@ -233,7 +363,7 @@ public class PayoutService {
                 .liquidCash(liquidity.getLiquidCash())
                 .lockedInInvestments(liquidity.getLockedInInvestments())
                 .outstandingLoans(liquidity.getOutstandingLoans())
-                .payoutAmount(request.getAmount())
+                .payoutAmount(requestedAmount)
                 .initiatedBy(initiator)
                 .initiatedAt(LocalDateTime.now())
                 .build();
@@ -257,6 +387,50 @@ public class PayoutService {
                     ? request.getAmount() 
                     : memberShare.getMemberValue();
 
+            // Validate withdrawal amount doesn't exceed member's share value
+            if (memberPayout.compareTo(memberShare.getMemberValue()) > 0) {
+                throw new RuntimeException(String.format(
+                        "Withdrawal amount (KES %,.2f) exceeds member's share value (KES %,.2f)", 
+                        memberPayout, memberShare.getMemberValue()));
+            }
+
+            // Also validate against liquid cash available
+            if (memberPayout.compareTo(liquidity.getLiquidCash()) > 0) {
+                throw new RuntimeException(String.format(
+                        "Withdrawal amount (KES %,.2f) exceeds available liquid cash (KES %,.2f)", 
+                        memberPayout, liquidity.getLiquidCash()));
+            }
+
+            // ========== GUARANTOR LIABILITY CHECK ==========
+            // Check if member is a guarantor for any active loans
+            // They must retain enough value to cover their guarantor obligations
+            BigDecimal guarantorLiability = calculateGuarantorLiability(member.getId(), tenantId);
+            if (guarantorLiability.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal remainingAfterWithdrawal = memberShare.getMemberValue().subtract(memberPayout);
+                if (remainingAfterWithdrawal.compareTo(guarantorLiability) < 0) {
+                    // Get details for error message
+                    List<GuarantorLiabilityDto> liabilities = getGuarantorLiabilities(member.getId(), tenantId);
+                    StringBuilder loanDetails = new StringBuilder();
+                    for (GuarantorLiabilityDto liability : liabilities) {
+                        loanDetails.append(String.format("\n- Loan to %s: Outstanding KES %,.2f (your liability: KES %,.2f)",
+                                liability.getBorrowerName(), 
+                                liability.getBalanceOutstanding(), 
+                                liability.getMemberLiability()));
+                    }
+                    
+                    BigDecimal maxWithdrawable = memberShare.getMemberValue().subtract(guarantorLiability);
+                    if (maxWithdrawable.compareTo(BigDecimal.ZERO) < 0) {
+                        maxWithdrawable = BigDecimal.ZERO;
+                    }
+                    
+                    throw new RuntimeException(String.format(
+                            "Member is a guarantor for active loans with total liability of KES %,.2f. " +
+                            "You must retain enough value to cover your guarantor obligations. " +
+                            "Maximum withdrawable amount is KES %,.2f.%s",
+                            guarantorLiability, maxWithdrawable, loanDetails.toString()));
+                }
+            }
+
             PayoutMember pm = PayoutMember.builder()
                     .payout(payout)
                     .member(member)
@@ -268,6 +442,18 @@ public class PayoutService {
             payout.addMemberPayout(pm);
         } else {
             // Distribution to all members
+            // Check if using ownership-based distribution
+            boolean ownershipBased = request.getUseOwnershipDistribution() != null && request.getUseOwnershipDistribution();
+            BigDecimal percentage = request.getDistributionPercentage() != null 
+                    ? request.getDistributionPercentage() : BigDecimal.valueOf(100);
+            
+            // Validate percentage
+            if (percentage.compareTo(BigDecimal.ONE) < 0) percentage = BigDecimal.ONE;
+            if (percentage.compareTo(BigDecimal.valueOf(100)) > 0) percentage = BigDecimal.valueOf(100);
+            
+            BigDecimal totalPayoutAmount = BigDecimal.ZERO;
+            List<PayoutMember> memberPayouts = new ArrayList<>();
+            
             for (MemberShareDto memberShare : memberShares) {
                 if (memberShare.getSharePercentage().compareTo(BigDecimal.ZERO) == 0) {
                     continue;
@@ -276,9 +462,21 @@ public class PayoutService {
                 Member member = memberRepository.findById(memberShare.getMemberId())
                         .orElseThrow(() -> new RuntimeException("Member not found: " + memberShare.getMemberId()));
 
-                BigDecimal memberPayout = request.getAmount()
-                        .multiply(memberShare.getSharePercentage())
-                        .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+                BigDecimal memberPayout;
+                if (ownershipBased) {
+                    // Ownership-based: each member gets X% of their estimated value
+                    BigDecimal memberValue = memberShare.getMemberValue() != null ? memberShare.getMemberValue() : BigDecimal.ZERO;
+                    memberPayout = memberValue
+                            .multiply(percentage)
+                            .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+                } else {
+                    // Fixed amount: distribute total amount based on share percentages
+                    memberPayout = requestedAmount
+                            .multiply(memberShare.getSharePercentage())
+                            .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+                }
+                
+                totalPayoutAmount = totalPayoutAmount.add(memberPayout);
 
                 PayoutMember pm = PayoutMember.builder()
                         .payout(payout)
@@ -288,6 +486,25 @@ public class PayoutService {
                         .payoutAmount(memberPayout)
                         .status(PayoutMember.PayoutMemberStatus.PENDING)
                         .build();
+                memberPayouts.add(pm);
+            }
+            
+            // If ownership-based and total exceeds liquid cash, scale down proportionally
+            if (ownershipBased && totalPayoutAmount.compareTo(liquidity.getLiquidCash()) > 0) {
+                BigDecimal scaleFactor = liquidity.getLiquidCash().divide(totalPayoutAmount, 6, RoundingMode.HALF_UP);
+                totalPayoutAmount = BigDecimal.ZERO;
+                for (PayoutMember pm : memberPayouts) {
+                    BigDecimal scaledPayout = pm.getPayoutAmount().multiply(scaleFactor).setScale(2, RoundingMode.HALF_UP);
+                    pm.setPayoutAmount(scaledPayout);
+                    totalPayoutAmount = totalPayoutAmount.add(scaledPayout);
+                }
+            }
+            
+            // Update payout amount
+            payout.setPayoutAmount(totalPayoutAmount);
+            
+            // Add all member payouts to the payout
+            for (PayoutMember pm : memberPayouts) {
                 payout.addMemberPayout(pm);
             }
         }

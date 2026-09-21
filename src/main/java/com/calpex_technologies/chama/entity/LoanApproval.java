@@ -30,8 +30,8 @@ public class LoanApproval {
     @Builder.Default
     private ApprovalType approvalType = ApprovalType.APPROVER; // GUARANTOR or APPROVER
     
-    @Column
-    private Integer level; // Which approval level (1, 2, or 3) - null for guarantors
+    @Column(nullable = false)
+    private Integer level; // For guarantors: 1-based index in guarantor list. For approvers: approval level (1, 2, or 3)
     
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "approver_id", nullable = false)

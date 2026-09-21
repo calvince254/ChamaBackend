@@ -27,4 +27,6 @@ public class ContributionTopUpDto {
     private String rejectionReason;
     private String paymentReference;
     private String notes;
+    private String targetMonth;  // Format: YYYY-MM
+    private String description;  // Description for the top-up
 }

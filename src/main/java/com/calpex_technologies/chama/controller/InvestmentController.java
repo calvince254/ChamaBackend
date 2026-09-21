@@ -71,6 +71,14 @@ public class InvestmentController {
         return ResponseEntity.ok(Map.of("count", count));
     }
 
+    // Get all approvals for a specific investment
+    @GetMapping("/{id}/approvals")
+    public ResponseEntity<List<InvestmentApprovalDto>> getInvestmentApprovals(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(investmentService.getApprovalsForInvestment(id, principal.getTenantId()));
+    }
+
     @PostMapping("/{id}/approve")
     public ResponseEntity<InvestmentDto> approveInvestment(
             @PathVariable Long id, 

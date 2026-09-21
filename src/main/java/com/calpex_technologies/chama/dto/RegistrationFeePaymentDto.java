@@ -25,4 +25,8 @@ public class RegistrationFeePaymentDto {
     private String rejectionReason;
     private String rejectedAt;
     private String rejectedByName;
+    
+    // Payment tracking (for unified payment flow)
+    private Boolean hasPendingClaim;
+    private Long payableId;
 }

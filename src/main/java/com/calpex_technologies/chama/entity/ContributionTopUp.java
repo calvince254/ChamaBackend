@@ -57,6 +57,19 @@ public class ContributionTopUp extends TenantAwareEntity {
     @Column(columnDefinition = "TEXT")
     private String notes;
 
+    /**
+     * The month for which this top-up is intended (e.g., 2026-10)
+     * If null, defaults to current month when approved
+     */
+    @Column(name = "target_month")
+    private java.time.YearMonth targetMonth;
+
+    /**
+     * Description of the top-up transaction (for display purposes)
+     */
+    @Column(name = "description")
+    private String description;
+
     public enum TopUpStatus {
         PENDING,    // Awaiting admin approval
         APPROVED,   // Approved and applied to contribution

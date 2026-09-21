@@ -31,7 +31,7 @@ public interface PenaltyRepository extends JpaRepository<Penalty, Long> {
     boolean existsByTenantIdAndMemberIdAndMeetingIdAndPenaltyType(
             Long tenantId, Long memberId, Long meetingId, Penalty.PenaltyType penaltyType);
     
-    // Check if penalty already exists for late payment
+    // Check if penalty already exists for late payment (contribution)
     boolean existsByTenantIdAndMemberIdAndContributionTypeIdAndPeriodMonthAndPenaltyType(
             Long tenantId, Long memberId, Long contributionTypeId, YearMonth periodMonth, Penalty.PenaltyType penaltyType);
     
@@ -62,6 +62,37 @@ public interface PenaltyRepository extends JpaRepository<Penalty, Long> {
     Page<Penalty> findByTenantIdAndMemberId(@Param("tenantId") Long tenantId, 
                                              @Param("memberId") Long memberId, 
                                              Pageable pageable);
+    
+    // Queries with penalty type filter
+    @Query("SELECT p FROM Penalty p WHERE p.tenant.id = :tenantId AND p.penaltyType = :penaltyType ORDER BY p.imposedAt DESC")
+    Page<Penalty> findByTenantIdAndPenaltyType(@Param("tenantId") Long tenantId,
+                                                @Param("penaltyType") Penalty.PenaltyType penaltyType,
+                                                Pageable pageable);
+    
+    @Query("SELECT p FROM Penalty p WHERE p.tenant.id = :tenantId AND p.penaltyType = :penaltyType AND p.status = :status ORDER BY p.imposedAt DESC")
+    Page<Penalty> findByTenantIdAndPenaltyTypeAndStatus(@Param("tenantId") Long tenantId,
+                                                         @Param("penaltyType") Penalty.PenaltyType penaltyType,
+                                                         @Param("status") Penalty.PenaltyStatus status,
+                                                         Pageable pageable);
+    
+    @Query("SELECT p FROM Penalty p WHERE p.tenant.id = :tenantId AND p.member.id = :memberId AND p.penaltyType = :penaltyType ORDER BY p.imposedAt DESC")
+    Page<Penalty> findByTenantIdAndMemberIdAndPenaltyType(@Param("tenantId") Long tenantId,
+                                                           @Param("memberId") Long memberId,
+                                                           @Param("penaltyType") Penalty.PenaltyType penaltyType,
+                                                           Pageable pageable);
+    
+    @Query("SELECT p FROM Penalty p WHERE p.tenant.id = :tenantId AND p.member.id = :memberId AND p.status = :status ORDER BY p.imposedAt DESC")
+    Page<Penalty> findByTenantIdAndMemberIdAndStatus(@Param("tenantId") Long tenantId,
+                                                      @Param("memberId") Long memberId,
+                                                      @Param("status") Penalty.PenaltyStatus status,
+                                                      Pageable pageable);
+    
+    @Query("SELECT p FROM Penalty p WHERE p.tenant.id = :tenantId AND p.member.id = :memberId AND p.penaltyType = :penaltyType AND p.status = :status ORDER BY p.imposedAt DESC")
+    Page<Penalty> findByTenantIdAndMemberIdAndPenaltyTypeAndStatus(@Param("tenantId") Long tenantId,
+                                                                    @Param("memberId") Long memberId,
+                                                                    @Param("penaltyType") Penalty.PenaltyType penaltyType,
+                                                                    @Param("status") Penalty.PenaltyStatus status,
+                                                                    Pageable pageable);
     
     @Modifying
     @Query("DELETE FROM Penalty p WHERE p.member.id = :memberId")

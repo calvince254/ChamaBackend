@@ -41,10 +41,17 @@ public class LoanDto {
     
     private String status;
     
-    // Guarantor approval workflow (Phase 1 - parallel)
+    // Payment tracking
+    private boolean hasPendingClaim;
+    private Long payableId; // ID of the Payable record for confirming payments
+    private BigDecimal pendingPaymentAmount; // Amount awaiting confirmation
+    
+    // Guarantor approval workflow (Phase 1 - sequential)
     private Integer requiredGuarantors;
     private Integer guarantorsApprovedCount;
+    private Integer currentGuarantorIndex; // 0-based index of current guarantor
     private List<String> pendingGuarantorNames; // Names of guarantors who haven't approved yet
+    private String approvalProgress; // e.g., "Waiting for John Doe (1/3 guarantors)" or "Approved by 2/3, waiting for Level 2"
     
     // Approver approval workflow (Phase 2 - sequential)
     private Integer currentApprovalLevel;

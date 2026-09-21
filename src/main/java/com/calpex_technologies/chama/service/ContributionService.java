@@ -18,6 +18,8 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -31,13 +33,14 @@ public class ContributionService {
     private final TenantRepository tenantRepository;
     private final TransactionRepository transactionRepository;
     private final ContributionTypeRepository contributionTypeRepository;
+    private final PayableRepository payableRepository;
+    private final PaymentClaimRepository paymentClaimRepository;
     
     private static final int DEFAULT_PAGE_SIZE = 10;
 
     public List<ContributionDto> getAllContributions(Long tenantId) {
-        return contributionRepository.findByTenantIdOrderByMonthDesc(tenantId).stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<Contribution> contributions = contributionRepository.findByTenantIdOrderByMonthDesc(tenantId);
+        return toDtoListWithPendingClaims(contributions, tenantId);
     }
     
     /**
@@ -60,15 +63,36 @@ public class ContributionService {
                     tenantId, contributionTypeId, month, pageable);
         }
         
-        Page<ContributionDto> dtoPage = contributionPage.map(this::toDto);
+        // Batch fetch pending payables for this page (need full Payable to get payableId)
+        List<Contribution> contributions = contributionPage.getContent();
+        List<Long> unpaidIds = contributions.stream()
+                .filter(c -> c.getStatus() != Contribution.ContributionStatus.PAID)
+                .map(Contribution::getId)
+                .collect(Collectors.toList());
+        
+        // Map contributionId -> payableId for awaiting confirmation payables
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        if (!unpaidIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.CONTRIBUTION, unpaidIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : pendingPayables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
+        
+        Page<ContributionDto> dtoPage = contributionPage.map(c -> {
+            boolean hasPending = pendingClaimPayableIds.containsKey(c.getId());
+            Long payableId = hasPending ? pendingClaimPayableIds.get(c.getId()) : null;
+            return toDto(c, hasPending, payableId);
+        });
         return PageResponse.from(dtoPage);
     }
 
     public List<ContributionDto> getContributionsByMonth(Long tenantId, YearMonth month) {
-        return contributionRepository.findByTenantIdOrderByMonthDesc(tenantId).stream()
+        List<Contribution> contributions = contributionRepository.findByTenantIdOrderByMonthDesc(tenantId).stream()
                 .filter(c -> c.getMonth().equals(month))
-                .map(this::toDto)
                 .collect(Collectors.toList());
+        return toDtoListWithPendingClaims(contributions, tenantId);
     }
 
     public List<ContributionDto> getContributionsByTypeAndMonth(Long tenantId, Long contributionTypeId, YearMonth month) {
@@ -81,6 +105,21 @@ public class ContributionService {
         // Get existing contributions for this type and month
         List<Contribution> existingContributions = contributionRepository
                 .findByTenantIdAndContributionTypeIdAndMonth(tenantId, contributionTypeId, month);
+        
+        // Batch fetch pending claims for existing unpaid contributions
+        List<Long> unpaidContributionIds = existingContributions.stream()
+                .filter(c -> c.getStatus() != Contribution.ContributionStatus.PAID)
+                .map(Contribution::getId)
+                .collect(Collectors.toList());
+        
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        if (!unpaidContributionIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.CONTRIBUTION, unpaidContributionIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : pendingPayables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
         
         // Create a map of memberId -> contribution for quick lookup
         java.util.Map<Long, Contribution> contributionMap = existingContributions.stream()
@@ -96,8 +135,10 @@ public class ContributionService {
             Contribution existing = contributionMap.get(member.getId());
             
             if (existing != null) {
-                // Member has a contribution record
-                result.add(toDto(existing));
+                // Member has a contribution record - check for pending claim
+                boolean hasPending = pendingClaimPayableIds.containsKey(existing.getId());
+                Long payableId = hasPending ? pendingClaimPayableIds.get(existing.getId()) : null;
+                result.add(toDto(existing, hasPending, payableId));
             } else {
                 // Member doesn't have a record yet - show as pending
                 ContributionDto dto = ContributionDto.builder()
@@ -114,6 +155,8 @@ public class ContributionService {
                         .dueDate(dueDate.toString())
                         .contributionTypeId(contributionType.getId())
                         .contributionTypeName(contributionType.getName())
+                        .hasPendingClaim(false)
+                        .payableId(null)
                         .build();
                 result.add(dto);
             }
@@ -126,11 +169,9 @@ public class ContributionService {
      * Get only saved contributions (no virtual pending records)
      */
     public List<ContributionDto> getSavedContributionsByTypeAndMonth(Long tenantId, Long contributionTypeId, YearMonth month) {
-        return contributionRepository
-                .findByTenantIdAndContributionTypeIdAndMonth(tenantId, contributionTypeId, month)
-                .stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<Contribution> contributions = contributionRepository
+                .findByTenantIdAndContributionTypeIdAndMonth(tenantId, contributionTypeId, month);
+        return toDtoListWithPendingClaims(contributions, tenantId);
     }
 
     /**
@@ -464,6 +505,28 @@ public class ContributionService {
     }
 
     private ContributionDto toDto(Contribution contribution) {
+        // For single contribution lookup (used by record payment), do individual query
+        boolean hasPendingClaim = false;
+        Long payableId = null;
+        if (contribution.getStatus() != Contribution.ContributionStatus.PAID) {
+            var payableOpt = payableRepository.findByPayableTypeAndPayableRefIdAndTenant_Id(
+                    PayableType.CONTRIBUTION, contribution.getId(), contribution.getTenant().getId());
+            if (payableOpt.isPresent()) {
+                Payable payable = payableOpt.get();
+                hasPendingClaim = payable.getStatus() == PayableStatus.AWAITING_CONFIRMATION;
+                if (hasPendingClaim) {
+                    payableId = payable.getId();
+                }
+            }
+        }
+        return toDto(contribution, hasPendingClaim, payableId);
+    }
+    
+    private ContributionDto toDto(Contribution contribution, boolean hasPendingClaim) {
+        return toDto(contribution, hasPendingClaim, null);
+    }
+    
+    private ContributionDto toDto(Contribution contribution, boolean hasPendingClaim, Long payableId) {
         ContributionDto.ContributionDtoBuilder builder = ContributionDto.builder()
                 .id(contribution.getId())
                 .memberId(contribution.getMember().getId())
@@ -476,7 +539,9 @@ public class ContributionService {
                 .penalty(contribution.getPenalty())
                 .penaltyApplied(contribution.isPenaltyApplied())
                 .paidOn(contribution.getPaidOn() != null ? contribution.getPaidOn().toString() : null)
-                .dueDate(contribution.getDueDate() != null ? contribution.getDueDate().toString() : null);
+                .dueDate(contribution.getDueDate() != null ? contribution.getDueDate().toString() : null)
+                .hasPendingClaim(hasPendingClaim)
+                .payableId(payableId);
 
         if (contribution.getContributionType() != null) {
             builder.contributionTypeId(contribution.getContributionType().getId())
@@ -484,5 +549,36 @@ public class ContributionService {
         }
 
         return builder.build();
+    }
+    
+    /**
+     * Convert list of contributions to DTOs with batch pending claim lookup.
+     */
+    private List<ContributionDto> toDtoListWithPendingClaims(List<Contribution> contributions, Long tenantId) {
+        if (contributions.isEmpty()) return List.of();
+        
+        // Get IDs of unpaid contributions
+        List<Long> unpaidIds = contributions.stream()
+                .filter(c -> c.getStatus() != Contribution.ContributionStatus.PAID)
+                .map(Contribution::getId)
+                .collect(Collectors.toList());
+        
+        // Batch fetch payables with pending claims (maps refId -> payableId)
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        if (!unpaidIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.CONTRIBUTION, unpaidIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : pendingPayables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
+        
+        return contributions.stream()
+                .map(c -> {
+                    boolean hasPending = pendingClaimPayableIds.containsKey(c.getId());
+                    Long pId = hasPending ? pendingClaimPayableIds.get(c.getId()) : null;
+                    return toDto(c, hasPending, pId);
+                })
+                .collect(Collectors.toList());
     }
 }

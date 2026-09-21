@@ -95,6 +95,8 @@ public class ContributionTopUpService {
                 .requestDate(LocalDateTime.now())
                 .paymentReference(dto.getPaymentReference())
                 .notes(dto.getNotes())
+                .targetMonth(dto.getTargetMonth() != null ? YearMonth.parse(dto.getTargetMonth()) : null)
+                .description(dto.getDescription())
                 .build();
 
         topUp = topUpRepository.save(topUp);
@@ -129,26 +131,26 @@ public class ContributionTopUpService {
         topUp.setApprovedBy(approver);
         topUp = topUpRepository.save(topUp);
 
-        // Find or create contribution for current month
-        YearMonth currentMonth = YearMonth.now();
+        // Find or create contribution for target month (or current month if not specified)
+        YearMonth targetMonth = topUp.getTargetMonth() != null ? topUp.getTargetMonth() : YearMonth.now();
         Contribution contribution = contributionRepository
                 .findByContributionTypeIdAndMemberIdAndMonth(
                         topUp.getContributionType().getId(), 
                         topUp.getMember().getId(), 
-                        currentMonth)
+                        targetMonth)
                 .orElse(null);
 
         if (contribution == null) {
             // Create new contribution record
             int dueDay = topUp.getContributionType().getDueDay() != null 
                     ? topUp.getContributionType().getDueDay() : 1;
-            LocalDate dueDate = currentMonth.atDay(Math.min(dueDay, currentMonth.lengthOfMonth()));
+            LocalDate dueDate = targetMonth.atDay(Math.min(dueDay, targetMonth.lengthOfMonth()));
             
             contribution = Contribution.builder()
                     .tenant(topUp.getTenant())
                     .member(topUp.getMember())
                     .contributionType(topUp.getContributionType())
-                    .month(currentMonth)
+                    .month(targetMonth)
                     .amountDue(topUp.getContributionType().getAmount())
                     .amountPaid(topUp.getAmount())
                     .dueDate(dueDate)
@@ -228,11 +230,19 @@ public class ContributionTopUpService {
 
     private void createTransaction(ContributionTopUp topUp, Contribution contribution) {
         String typeName = topUp.getContributionType().getName();
+        String description = topUp.getDescription() != null && !topUp.getDescription().isEmpty()
+                ? topUp.getDescription()
+                : "Manual top-up: " + typeName + " from " + topUp.getMember().getName();
+        
+        // Include month info if specified
+        if (topUp.getTargetMonth() != null) {
+            description += " for " + topUp.getTargetMonth().toString();
+        }
         
         Transaction transaction = Transaction.builder()
                 .date(LocalDate.now())
                 .type(Transaction.TransactionType.CONTRIBUTION)
-                .description("Manual top-up: " + typeName + " from " + topUp.getMember().getName())
+                .description(description)
                 .amount(topUp.getAmount())
                 .direction(Transaction.TransactionDirection.IN)
                 .member(topUp.getMember())
@@ -257,7 +267,9 @@ public class ContributionTopUpService {
                 .approvalDate(topUp.getApprovalDate() != null ? topUp.getApprovalDate().toString() : null)
                 .rejectionReason(topUp.getRejectionReason())
                 .paymentReference(topUp.getPaymentReference())
-                .notes(topUp.getNotes());
+                .notes(topUp.getNotes())
+                .targetMonth(topUp.getTargetMonth() != null ? topUp.getTargetMonth().toString() : null)
+                .description(topUp.getDescription());
 
         if (topUp.getApprovedBy() != null) {
             builder.approvedById(topUp.getApprovedBy().getId())

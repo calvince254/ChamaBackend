@@ -221,6 +221,17 @@ public class InvestmentService {
                 .collect(Collectors.toList());
     }
 
+    public List<InvestmentApprovalDto> getApprovalsForInvestment(Long investmentId, Long tenantId) {
+        Investment investment = investmentRepository.findById(investmentId)
+                .orElseThrow(() -> new RuntimeException("Investment not found"));
+        if (!investment.getTenant().getId().equals(tenantId)) {
+            throw new RuntimeException("Investment not found");
+        }
+        return approvalRepository.findByInvestmentId(investmentId).stream()
+                .map(this::toApprovalDto)
+                .collect(Collectors.toList());
+    }
+
     // Count pending approvals for member (for badge/notification)
     public long countPendingApprovalsForMember(Long memberId) {
         return approvalRepository.countPendingApprovalsForMember(memberId);
@@ -379,6 +390,9 @@ public class InvestmentService {
 
         String currentUser = getCurrentUsername();
         
+        // Store the amount being written off (total principal invested)
+        java.math.BigDecimal writeOffAmount = investment.getAmountInvested();
+        
         // Create value history entry for write-off
         createValueHistoryEntry(investment, java.math.BigDecimal.ZERO, investment.getCurrentValue(), "Investment written off: " + notes);
         
@@ -390,6 +404,20 @@ public class InvestmentService {
         investment.setCurrentValue(java.math.BigDecimal.ZERO);
         
         investment = investmentRepository.save(investment);
+        
+        // Create transaction to record the write-off loss
+        // This is an OUT transaction representing the loss of the invested amount
+        Transaction transaction = Transaction.builder()
+                .date(LocalDate.now())
+                .type(Transaction.TransactionType.INVESTMENT)
+                .description("Investment Write-Off: " + investment.getName() + " - " + notes)
+                .amount(writeOffAmount)
+                .direction(Transaction.TransactionDirection.OUT)
+                .referenceId(investment.getId())
+                .referenceType("INVESTMENT_WRITE_OFF")
+                .tenant(investment.getTenant())
+                .build();
+        transactionRepository.save(transaction);
         
         return toDto(investmentRepository.findByIdAndTenantId(id, tenantId).orElse(investment));
     }

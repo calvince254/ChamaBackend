@@ -37,4 +37,7 @@ public class LoanPenaltyDto {
     private String waivedAt;
     private String waivedByName;
     private String waiveReason;
+    
+    private boolean hasPendingClaim; // True if there's a payment claim awaiting admin confirmation
+    private Long payableId; // ID of the Payable record for confirming payments
 }

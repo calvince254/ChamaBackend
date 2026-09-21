@@ -52,10 +52,14 @@ public class HttpConfigurer {
             .requestMatchers("DELETE", "/api/contribution-types/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_CONTRIBUTION_TYPE")
             
             // ==================== LOANS ====================
+            // Specific paths MUST come before path variable patterns
             .requestMatchers("GET", "/api/loans/my-loans").authenticated()  // Any authenticated user can see their own loans
             .requestMatchers("GET", "/api/loans/pending-approvals").hasAnyAuthority("FULL_ACCESS", "VIEW_PENDING_LOAN_APPROVALS")
-            .requestMatchers("GET", "/api/loans", "/api/loans/{id}").hasAnyAuthority("FULL_ACCESS", "VIEW_LOANS")
-            .requestMatchers("POST", "/api/loans", "/api/loans/apply").hasAnyAuthority("FULL_ACCESS", "APPLY_FOR_LOAN")
+            .requestMatchers("POST", "/api/loans/check-eligibility").authenticated()  // Any member can check loan eligibility
+            .requestMatchers("POST", "/api/loans/apply").hasAnyAuthority("FULL_ACCESS", "APPLY_FOR_LOAN")
+            .requestMatchers("GET", "/api/loans/{id}").hasAnyAuthority("FULL_ACCESS", "VIEW_LOANS")
+            .requestMatchers("GET", "/api/loans").hasAnyAuthority("FULL_ACCESS", "VIEW_LOANS")
+            .requestMatchers("POST", "/api/loans").hasAnyAuthority("FULL_ACCESS", "APPLY_FOR_LOAN")
             .requestMatchers("PUT", "/api/loans/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_LOAN")
             .requestMatchers("DELETE", "/api/loans/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_LOAN")
             .requestMatchers("POST", "/api/loans/{id}/approve").hasAnyAuthority("FULL_ACCESS", "APPROVE_LOAN")
@@ -63,17 +67,17 @@ public class HttpConfigurer {
             .requestMatchers("POST", "/api/loans/{id}/disburse").hasAnyAuthority("FULL_ACCESS", "DISBURSE_LOAN")
             .requestMatchers("POST", "/api/loans/{id}/repay").hasAnyAuthority("FULL_ACCESS", "RECORD_LOAN_REPAYMENT")
             
-            // ==================== LOAN PRODUCTS (Settings) ====================
-            .requestMatchers("GET", "/api/loan-products/**").hasAnyAuthority("FULL_ACCESS", "VIEW_LOAN_PRODUCTS")
-            .requestMatchers("POST", "/api/loan-products").hasAnyAuthority("FULL_ACCESS", "CREATE_LOAN_PRODUCT")
-            .requestMatchers("PUT", "/api/loan-products/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_LOAN_PRODUCT")
-            .requestMatchers("DELETE", "/api/loan-products/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_LOAN_PRODUCT")
-            
-            // ==================== LOAN PENALTIES ====================
+            // ==================== LOAN PENALTIES (under /api/loans/penalties/) ====================
             .requestMatchers("GET", "/api/loans/penalties/my-penalties").authenticated()
             .requestMatchers("GET", "/api/loans/penalties/**").hasAnyAuthority("FULL_ACCESS", "VIEW_LOAN_PENALTIES")
             .requestMatchers("POST", "/api/loans/penalties/{id}/waive").hasAnyAuthority("FULL_ACCESS", "WAIVE_LOAN_PENALTY")
             .requestMatchers("POST", "/api/loans/penalties/{id}/pay").hasAnyAuthority("FULL_ACCESS", "PAY_LOAN_PENALTY")
+            
+            // ==================== LOAN PRODUCTS (Settings) ====================
+            .requestMatchers("GET", "/api/loan-products/**").authenticated()  // Any member can view loan products
+            .requestMatchers("POST", "/api/loan-products").hasAnyAuthority("FULL_ACCESS", "CREATE_LOAN_PRODUCT")
+            .requestMatchers("PUT", "/api/loan-products/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_LOAN_PRODUCT")
+            .requestMatchers("DELETE", "/api/loan-products/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_LOAN_PRODUCT")
             
             // ==================== MEETINGS ====================
             .requestMatchers("GET", "/api/meetings/**").hasAnyAuthority("FULL_ACCESS", "VIEW_MEETINGS")
@@ -127,12 +131,24 @@ public class HttpConfigurer {
             .requestMatchers("POST", "/api/payouts/{id}/mark-all-paid").hasAnyAuthority("FULL_ACCESS", "PROCESS_PAYOUT")
             
             // ==================== INVESTMENTS ====================
-            .requestMatchers("GET", "/api/investments/**").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS")
+            .requestMatchers("GET", "/api/investments").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS")
+            .requestMatchers("GET", "/api/investments/paginated").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS")
+            .requestMatchers("GET", "/api/investments/my-pending-approvals").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS", "APPROVE_INVESTMENT")
+            .requestMatchers("GET", "/api/investments/my-pending-approvals/count").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS", "APPROVE_INVESTMENT")
+            .requestMatchers("GET", "/api/investments/{id}").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS")
+            .requestMatchers("GET", "/api/investments/{id}/history").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS")
+            .requestMatchers("GET", "/api/investments/{id}/topups").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS")
+            .requestMatchers("GET", "/api/investments/{id}/approvals").hasAnyAuthority("FULL_ACCESS", "VIEW_INVESTMENTS")
             .requestMatchers("POST", "/api/investments").hasAnyAuthority("FULL_ACCESS", "CREATE_INVESTMENT")
             .requestMatchers("PUT", "/api/investments/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_INVESTMENT")
             .requestMatchers("DELETE", "/api/investments/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_INVESTMENT")
-            .requestMatchers("POST", "/api/investments/{id}/close").hasAnyAuthority("FULL_ACCESS", "CLOSE_INVESTMENT")
             .requestMatchers("POST", "/api/investments/{id}/topup").hasAnyAuthority("FULL_ACCESS", "TOPUP_INVESTMENT")
+            .requestMatchers("POST", "/api/investments/{id}/value").hasAnyAuthority("FULL_ACCESS", "UPDATE_INVESTMENT_VALUE")
+            .requestMatchers("POST", "/api/investments/{id}/sell").hasAnyAuthority("FULL_ACCESS", "SELL_INVESTMENT")
+            .requestMatchers("POST", "/api/investments/{id}/write-off").hasAnyAuthority("FULL_ACCESS", "WRITE_OFF_INVESTMENT")
+            .requestMatchers("POST", "/api/investments/{id}/vote").hasAnyAuthority("FULL_ACCESS", "APPROVE_INVESTMENT")
+            .requestMatchers("POST", "/api/investments/{id}/approve").hasAnyAuthority("FULL_ACCESS", "APPROVE_INVESTMENT")
+            .requestMatchers("POST", "/api/investments/{id}/reject").hasAnyAuthority("FULL_ACCESS", "APPROVE_INVESTMENT")
             
             // ==================== MERRY-GO-ROUND ====================
             .requestMatchers("GET", "/api/merry-go-round/**").hasAnyAuthority("FULL_ACCESS", "VIEW_MERRY_GO_ROUND")
@@ -151,8 +167,12 @@ public class HttpConfigurer {
             .requestMatchers("POST", "/api/merry-go-round/contributions/pay-multiple").hasAnyAuthority("FULL_ACCESS", "RECORD_MGR_CONTRIBUTION")
             .requestMatchers("POST", "/api/merry-go-round/contributions/{contributionId}/fine").hasAnyAuthority("FULL_ACCESS", "IMPOSE_MGR_FINE")
             // Fines
+            .requestMatchers("GET", "/api/merry-go-round/cycles/{cycleId}/fines").hasAnyAuthority("FULL_ACCESS", "VIEW_ALL_MGR_FINES")
+            .requestMatchers("GET", "/api/merry-go-round/cycles/{cycleId}/my-fines").hasAnyAuthority("FULL_ACCESS", "VIEW_MY_MGR_FINES", "VIEW_ALL_MGR_FINES")
             .requestMatchers("POST", "/api/merry-go-round/fines").hasAnyAuthority("FULL_ACCESS", "IMPOSE_MGR_FINE")
             .requestMatchers("POST", "/api/merry-go-round/fines/{id}/pay").hasAnyAuthority("FULL_ACCESS", "PAY_MGR_FINE")
+            .requestMatchers("POST", "/api/merry-go-round/fines/{id}/initiate-payment").hasAnyAuthority("FULL_ACCESS", "PAY_MGR_FINE", "VIEW_MY_MGR_FINES")
+            .requestMatchers("POST", "/api/merry-go-round/fines/{id}/record-payment").hasAnyAuthority("FULL_ACCESS", "RECORD_MGR_FINE_PAYMENT")
             .requestMatchers("POST", "/api/merry-go-round/fines/{id}/waive").hasAnyAuthority("FULL_ACCESS", "WAIVE_MGR_FINE")
             
             // ==================== FINES ====================
@@ -225,11 +245,11 @@ public class HttpConfigurer {
             .requestMatchers("GET", "/api/registration-fee/info").authenticated()
             .requestMatchers("GET", "/api/registration-fee/member/{memberId}").authenticated()
             .requestMatchers("GET", "/api/registration-fee").hasAnyAuthority("FULL_ACCESS", "VIEW_REGISTRATION_FEES")
-            .requestMatchers("GET", "/api/registration-fee/awaiting-verification").hasAnyAuthority("FULL_ACCESS", "VERIFY_REGISTRATION_FEE")
-            .requestMatchers("GET", "/api/registration-fee/awaiting-verification/count").hasAnyAuthority("FULL_ACCESS", "VERIFY_REGISTRATION_FEE")
-            .requestMatchers("POST", "/api/registration-fee/pay").hasAnyAuthority("FULL_ACCESS", "PAY_REGISTRATION_FEE")
-            .requestMatchers("POST", "/api/registration-fee/{id}/verify").hasAnyAuthority("FULL_ACCESS", "VERIFY_REGISTRATION_FEE")
-            .requestMatchers("POST", "/api/registration-fee/{id}/reject").hasAnyAuthority("FULL_ACCESS", "VERIFY_REGISTRATION_FEE")
+            .requestMatchers("GET", "/api/registration-fee/awaiting-verification").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            .requestMatchers("GET", "/api/registration-fee/awaiting-verification/count").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            .requestMatchers("POST", "/api/registration-fee/pay").hasAnyAuthority("FULL_ACCESS", "PAY_REGISTRATION_FEE", "PAY_ALL_REGISTRATION_FEE")
+            .requestMatchers("POST", "/api/registration-fee/{id}/verify").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            .requestMatchers("POST", "/api/registration-fee/{id}/reject").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
             
             // ==================== RESOURCES ====================
             .requestMatchers("GET", "/api/resources").hasAnyAuthority("FULL_ACCESS", "VIEW_RESOURCES")
@@ -259,6 +279,44 @@ public class HttpConfigurer {
             .requestMatchers("POST", "/api/contribution-topups/{id}/approve").hasAnyAuthority("FULL_ACCESS", "APPROVE_CONTRIBUTION_TOPUP")
             .requestMatchers("POST", "/api/contribution-topups/{id}/reject").hasAnyAuthority("FULL_ACCESS", "APPROVE_CONTRIBUTION_TOPUP")
             
+            // ==================== PAYMENT SETTINGS ====================
+            .requestMatchers("GET", "/api/payment-settings").hasAnyAuthority("FULL_ACCESS", "VIEW_PAYMENT_SETTINGS")
+            .requestMatchers("PUT", "/api/payment-settings").hasAnyAuthority("FULL_ACCESS", "MANAGE_PAYMENT_SETTINGS")
+            .requestMatchers("GET", "/api/payment-settings/methods").authenticated()  // All users can see enabled methods
+            .requestMatchers("GET", "/api/payment-settings/stk-push/available").authenticated()
+            .requestMatchers("GET", "/api/payment-settings/in-app-sms/available").authenticated()
+            .requestMatchers("PATCH", "/api/payment-settings/methods/{method}/toggle").hasAnyAuthority("FULL_ACCESS", "MANAGE_PAYMENT_SETTINGS")
+            
+            // ==================== PAYMENTS (Universal Payment System) ====================
+            .requestMatchers("POST", "/api/payments/claims").authenticated()  // Any member can create a payment claim
+            .requestMatchers("GET", "/api/payments/claims/{id}").authenticated()
+            .requestMatchers("GET", "/api/payments/claims/{id}/status").authenticated()
+            .requestMatchers("PATCH", "/api/payments/claims/{id}/reference").authenticated()
+            .requestMatchers("POST", "/api/payments/claims/{id}/verify").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            .requestMatchers("POST", "/api/payments/claims/{id}/reject").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            .requestMatchers("GET", "/api/payments/pending-review").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            .requestMatchers("GET", "/api/payments/my-claims").authenticated()
+            // Payment Events (Treasurer device SMS upload)
+            .requestMatchers("POST", "/api/payments/events").hasAnyAuthority("FULL_ACCESS", "UPLOAD_PAYMENT_EVENTS")
+            .requestMatchers("GET", "/api/payments/events/unmatched").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            .requestMatchers("POST", "/api/payments/events/{id}/manual-match").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            // STK Push
+            .requestMatchers("POST", "/api/payments/stk-push").authenticated()
+            .requestMatchers("POST", "/api/payments/stk-push/callback").permitAll()  // Safaricom callback
+            // Treasurer Devices
+            .requestMatchers("POST", "/api/payments/devices/register").hasAnyAuthority("FULL_ACCESS", "REGISTER_TREASURER_DEVICE")
+            .requestMatchers("GET", "/api/payments/devices").hasAnyAuthority("FULL_ACCESS", "VIEW_TREASURER_DEVICES")
+            .requestMatchers("POST", "/api/payments/devices/{id}/revoke").hasAnyAuthority("FULL_ACCESS", "MANAGE_TREASURER_DEVICES")
+            // Payables
+            .requestMatchers("GET", "/api/payables/my").authenticated()  // Members see their own payables
+            .requestMatchers("GET", "/api/payables/{id}").authenticated()
+            .requestMatchers("GET", "/api/payables").hasAnyAuthority("FULL_ACCESS", "VIEW_ALL_PAYABLES")
+            // Payment Dashboard (Treasurer view)
+            .requestMatchers("GET", "/api/payments/dashboard").hasAnyAuthority("FULL_ACCESS", "VIEW_PAYMENT_DASHBOARD")
+            // Unified Payment Confirmation/Rejection (Admin action)
+            .requestMatchers("POST", "/api/payments/payables/*/confirm").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            .requestMatchers("POST", "/api/payments/payables/*/reject").hasAnyAuthority("FULL_ACCESS", "VERIFY_PAYMENTS")
+            
             // ==================== DEFAULT ====================
             .anyRequest().authenticated()
         );
@@ -285,7 +343,8 @@ public class HttpConfigurer {
             new PermissionDefinition("DELETE_MEMBER", "Delete Member (Soft)"),
             new PermissionDefinition("HARD_DELETE_MEMBER", "Permanently Delete Member & Data"),
             new PermissionDefinition("ACTIVATE_MEMBER", "Activate Member"),
-            new PermissionDefinition("DEACTIVATE_MEMBER", "Deactivate Member")
+            new PermissionDefinition("DEACTIVATE_MEMBER", "Deactivate Member"),
+            new PermissionDefinition("RESET_PASSWORD", "Reset Member Password")
         ));
         
         // Contributions
@@ -317,7 +376,6 @@ public class HttpConfigurer {
             new PermissionDefinition("REJECT_LOAN", "Reject Loan"),
             new PermissionDefinition("DISBURSE_LOAN", "Disburse Loan"),
             new PermissionDefinition("RECORD_LOAN_REPAYMENT", "Record Loan Repayment"),
-            new PermissionDefinition("VERIFY_LOAN_PAYMENT", "Verify Loan Payment"),
             new PermissionDefinition("VIEW_LOAN_PENALTIES", "View Loan Penalties"),
             new PermissionDefinition("WAIVE_LOAN_PENALTY", "Waive Loan Penalty"),
             new PermissionDefinition("PAY_LOAN_PENALTY", "Pay Loan Penalty")
@@ -383,16 +441,21 @@ public class HttpConfigurer {
         // Investments
         permissions.put("Investments", java.util.List.of(
             new PermissionDefinition("VIEW_INVESTMENTS", "View Investments"),
-            new PermissionDefinition("CREATE_INVESTMENT", "Create Investment"),
+            new PermissionDefinition("CREATE_INVESTMENT", "Create/Propose Investment"),
             new PermissionDefinition("EDIT_INVESTMENT", "Edit Investment"),
             new PermissionDefinition("DELETE_INVESTMENT", "Delete Investment"),
-            new PermissionDefinition("CLOSE_INVESTMENT", "Close Investment"),
-            new PermissionDefinition("TOPUP_INVESTMENT", "Add Principal (Top-up)")
+            new PermissionDefinition("TOPUP_INVESTMENT", "Add Principal (Top-up)"),
+            new PermissionDefinition("UPDATE_INVESTMENT_VALUE", "Update Investment Value"),
+            new PermissionDefinition("SELL_INVESTMENT", "Sell Investment"),
+            new PermissionDefinition("WRITE_OFF_INVESTMENT", "Write Off Investment"),
+            new PermissionDefinition("APPROVE_INVESTMENT", "Approve/Reject Investment")
         ));
         
         // Merry-Go-Round
         permissions.put("Merry-Go-Round", java.util.List.of(
             new PermissionDefinition("VIEW_MERRY_GO_ROUND", "View Merry-Go-Round"),
+            new PermissionDefinition("VIEW_MY_MGR_FINES", "View My MGR Fines"),
+            new PermissionDefinition("VIEW_ALL_MGR_FINES", "View All MGR Fines"),
             new PermissionDefinition("START_MERRY_GO_ROUND_CYCLE", "Start New Cycle"),
             new PermissionDefinition("CREATE_MGR_CYCLE", "Create Cycle"),
             new PermissionDefinition("EDIT_MGR_CYCLE", "Edit Cycle"),
@@ -401,6 +464,8 @@ public class HttpConfigurer {
             new PermissionDefinition("RECORD_MGR_CONTRIBUTION", "Record MGR Contribution"),
             new PermissionDefinition("IMPOSE_MGR_FINE", "Impose MGR Fine"),
             new PermissionDefinition("PAY_MGR_FINE", "Pay MGR Fine"),
+            new PermissionDefinition("RECORD_MGR_FINE_PAYMENT", "Record MGR Fine Payment (Admin)"),
+            new PermissionDefinition("CONFIRM_MGR_FINE_PAYMENT", "Confirm MGR Fine Payment"),
             new PermissionDefinition("WAIVE_MGR_FINE", "Waive MGR Fine")
         ));
         
@@ -456,8 +521,21 @@ public class HttpConfigurer {
         // Registration Fee
         permissions.put("Registration Fee", java.util.List.of(
             new PermissionDefinition("VIEW_REGISTRATION_FEES", "View Registration Fee Payments"),
-            new PermissionDefinition("PAY_REGISTRATION_FEE", "Pay Registration Fee"),
-            new PermissionDefinition("VERIFY_REGISTRATION_FEE", "Verify/Reject Registration Fee Payment")
+            new PermissionDefinition("PAY_REGISTRATION_FEE", "Pay Own Registration Fee"),
+            new PermissionDefinition("PAY_ALL_REGISTRATION_FEE", "Pay Registration Fee for Any Member")
+        ));
+        
+        // Payment Settings
+        permissions.put("Payment Settings", java.util.List.of(
+            new PermissionDefinition("VIEW_PAYMENT_SETTINGS", "View Payment Settings"),
+            new PermissionDefinition("MANAGE_PAYMENT_SETTINGS", "Manage Payment Settings"),
+            new PermissionDefinition("VERIFY_PAYMENTS", "Verify/Reject Payments"),
+            new PermissionDefinition("VIEW_PAYMENT_DASHBOARD", "View Payment Dashboard"),
+            new PermissionDefinition("UPLOAD_PAYMENT_EVENTS", "Upload Payment Events (Treasurer)"),
+            new PermissionDefinition("REGISTER_TREASURER_DEVICE", "Register Treasurer Device"),
+            new PermissionDefinition("VIEW_TREASURER_DEVICES", "View Treasurer Devices"),
+            new PermissionDefinition("MANAGE_TREASURER_DEVICES", "Manage Treasurer Devices"),
+            new PermissionDefinition("VIEW_ALL_PAYABLES", "View All Payables")
         ));
         
         // Resources

@@ -29,4 +29,8 @@ public class WelfareContributionDto {
     private String sourceContributionTypeName;
     private Long sourceContributionId;
     private String paymentMethod;
+    
+    // Payment tracking
+    private Boolean hasPendingClaim;
+    private Long payableId; // ID of the Payable record for confirming payments
 }

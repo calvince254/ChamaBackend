@@ -172,6 +172,13 @@ public class MerryGoRoundController {
         return ResponseEntity.ok(merryGoRoundService.getFinesByCycle(cycleId, principal.getTenantId()));
     }
 
+    @GetMapping("/cycles/{cycleId}/my-fines")
+    public ResponseEntity<List<MerryGoRoundFineDto>> getMyFinesByCycle(
+            @PathVariable Long cycleId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(merryGoRoundService.getMyFinesByCycle(cycleId, principal.getMemberId(), principal.getTenantId()));
+    }
+
     @PostMapping("/fines")
     public ResponseEntity<List<MerryGoRoundFineDto>> imposeFine(
             @Valid @RequestBody ImposeMgrFineRequest request,
@@ -198,6 +205,33 @@ public class MerryGoRoundController {
             @PathVariable Long id,
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(merryGoRoundService.payFine(id, principal.getTenantId()));
+    }
+
+    /**
+     * Initiate payment for an MGR fine using the unified payment system.
+     * Supports MANUAL (reference code), STK_PUSH (M-PESA), and IN_APP_SMS payment methods.
+     */
+    @PostMapping("/fines/{id}/initiate-payment")
+    public ResponseEntity<InitiatePaymentResponse> initiateFinepayment(
+            @PathVariable Long id,
+            @RequestBody InitiatePaymentRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(merryGoRoundService.initiateFinePayment(id, request, principal.getMemberId(), principal.getTenantId()));
+    }
+
+    /**
+     * Admin records a payment for an MGR fine (bypasses member payment flow).
+     */
+    @PostMapping("/fines/{id}/record-payment")
+    public ResponseEntity<MerryGoRoundFineDto> recordFinePayment(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        java.math.BigDecimal amount = null;
+        if (body != null && body.get("amount") != null) {
+            amount = new java.math.BigDecimal(body.get("amount").toString());
+        }
+        return ResponseEntity.ok(merryGoRoundService.recordFinePayment(id, amount, principal.getTenantId()));
     }
 
     @PostMapping("/fines/{id}/waive")

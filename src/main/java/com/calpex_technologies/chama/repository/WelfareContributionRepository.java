@@ -32,4 +32,7 @@ public interface WelfareContributionRepository extends JpaRepository<WelfareCont
     
     @Query("SELECT COALESCE(SUM(wc.amountPaid), 0) FROM WelfareContribution wc WHERE wc.tenant.id = :tenantId AND wc.paid = true")
     java.math.BigDecimal sumByTenantId(@org.springframework.data.repository.query.Param("tenantId") Long tenantId);
+    
+    @Query("SELECT COALESCE(SUM(wc.amountPaid), 0) FROM WelfareContribution wc WHERE wc.welfareEvent.id = :eventId")
+    java.math.BigDecimal sumPaidByEventId(@org.springframework.data.repository.query.Param("eventId") Long eventId);
 }

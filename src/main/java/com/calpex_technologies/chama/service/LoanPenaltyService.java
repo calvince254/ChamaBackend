@@ -3,9 +3,14 @@ package com.calpex_technologies.chama.service;
 import com.calpex_technologies.chama.dto.LoanPenaltyDto;
 import com.calpex_technologies.chama.entity.LoanPenalty;
 import com.calpex_technologies.chama.entity.Member;
+import com.calpex_technologies.chama.entity.Payable;
+import com.calpex_technologies.chama.entity.PayableStatus;
+import com.calpex_technologies.chama.entity.PayableType;
 import com.calpex_technologies.chama.entity.Transaction;
 import com.calpex_technologies.chama.repository.LoanPenaltyRepository;
 import com.calpex_technologies.chama.repository.MemberRepository;
+import com.calpex_technologies.chama.repository.PayableRepository;
+import com.calpex_technologies.chama.repository.PaymentClaimRepository;
 import com.calpex_technologies.chama.repository.TransactionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +22,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
@@ -28,6 +34,8 @@ public class LoanPenaltyService {
     private final LoanPenaltyRepository penaltyRepository;
     private final MemberRepository memberRepository;
     private final TransactionRepository transactionRepository;
+    private final PayableRepository payableRepository;
+    private final PaymentClaimRepository paymentClaimRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -36,28 +44,28 @@ public class LoanPenaltyService {
      * Get all penalties for a tenant (admin view).
      */
     public List<LoanPenaltyDto> getAllPenalties(Long tenantId) {
-        return penaltyRepository.findByTenantIdOrderByImposedAtDesc(tenantId).stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<LoanPenalty> penalties = penaltyRepository.findByTenantIdOrderByImposedAtDesc(tenantId);
+        return toDtoListWithPendingClaims(penalties, tenantId);
     }
 
     /**
      * Get penalties for a specific member (member's own penalties).
      */
     public List<LoanPenaltyDto> getMyPenalties(Long tenantId, Long memberId) {
-        return penaltyRepository.findByMemberIdOrderByImposedAtDesc(memberId).stream()
+        List<LoanPenalty> penalties = penaltyRepository.findByMemberIdOrderByImposedAtDesc(memberId).stream()
                 .filter(p -> p.getTenant().getId().equals(tenantId))
-                .map(this::toDto)
                 .collect(Collectors.toList());
+        return toDtoListWithPendingClaims(penalties, tenantId);
     }
 
     /**
      * Get penalties for a specific loan.
      */
     public List<LoanPenaltyDto> getPenaltiesForLoan(Long loanId) {
-        return penaltyRepository.findByLoanIdOrderByImposedAtDesc(loanId).stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<LoanPenalty> penalties = penaltyRepository.findByLoanIdOrderByImposedAtDesc(loanId);
+        if (penalties.isEmpty()) return List.of();
+        Long tenantId = penalties.get(0).getTenant().getId();
+        return toDtoListWithPendingClaims(penalties, tenantId);
     }
 
     /**
@@ -170,6 +178,28 @@ public class LoanPenaltyService {
     }
 
     private LoanPenaltyDto toDto(LoanPenalty penalty) {
+        // For single penalty lookup, do individual query
+        boolean hasPendingClaim = false;
+        Long payableId = null;
+        if (penalty.getStatus() != LoanPenalty.PenaltyStatus.PAID && penalty.getStatus() != LoanPenalty.PenaltyStatus.WAIVED) {
+            var payableOpt = payableRepository.findByPayableTypeAndPayableRefIdAndTenant_Id(
+                    PayableType.LOAN_PENALTY, penalty.getId(), penalty.getTenant().getId());
+            if (payableOpt.isPresent()) {
+                Payable payable = payableOpt.get();
+                hasPendingClaim = payable.getStatus() == PayableStatus.AWAITING_CONFIRMATION;
+                if (hasPendingClaim) {
+                    payableId = payable.getId();
+                }
+            }
+        }
+        return toDto(penalty, hasPendingClaim, payableId);
+    }
+    
+    private LoanPenaltyDto toDto(LoanPenalty penalty, boolean hasPendingClaim) {
+        return toDto(penalty, hasPendingClaim, null);
+    }
+    
+    private LoanPenaltyDto toDto(LoanPenalty penalty, boolean hasPendingClaim, Long payableId) {
         return LoanPenaltyDto.builder()
                 .id(penalty.getId())
                 .loanId(penalty.getLoan().getId())
@@ -192,7 +222,39 @@ public class LoanPenaltyService {
                 .waivedAt(penalty.getWaivedAt() != null ? penalty.getWaivedAt().format(DATETIME_FORMATTER) : null)
                 .waivedByName(penalty.getWaivedBy() != null ? penalty.getWaivedBy().getName() : null)
                 .waiveReason(penalty.getWaiveReason())
+                .hasPendingClaim(hasPendingClaim)
+                .payableId(payableId)
                 .build();
+    }
+    
+    /**
+     * Convert list of loan penalties to DTOs with batch pending claim lookup.
+     */
+    private List<LoanPenaltyDto> toDtoListWithPendingClaims(List<LoanPenalty> penalties, Long tenantId) {
+        if (penalties.isEmpty()) return List.of();
+        
+        List<Long> unpaidIds = penalties.stream()
+                .filter(p -> p.getStatus() != LoanPenalty.PenaltyStatus.PAID && p.getStatus() != LoanPenalty.PenaltyStatus.WAIVED)
+                .map(LoanPenalty::getId)
+                .collect(Collectors.toList());
+        
+        // Batch fetch payables with pending claims (maps refId -> payableId)
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        if (!unpaidIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.LOAN_PENALTY, unpaidIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : pendingPayables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
+        
+        return penalties.stream()
+                .map(p -> {
+                    boolean hasPending = pendingClaimPayableIds.containsKey(p.getId());
+                    Long pId = hasPending ? pendingClaimPayableIds.get(p.getId()) : null;
+                    return toDto(p, hasPending, pId);
+                })
+                .collect(Collectors.toList());
     }
 
     @lombok.Data

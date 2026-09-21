@@ -4,6 +4,7 @@ import com.calpex_technologies.chama.dto.CreateMemberRequest;
 import com.calpex_technologies.chama.dto.MemberDto;
 import com.calpex_technologies.chama.dto.MemberFinancialSummaryDto;
 import com.calpex_technologies.chama.dto.PageResponse;
+import com.calpex_technologies.chama.dto.ResetPasswordRequest;
 import com.calpex_technologies.chama.dto.TransactionDto;
 import com.calpex_technologies.chama.security.UserPrincipal;
 import com.calpex_technologies.chama.service.MemberService;
@@ -11,10 +12,12 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/members")
@@ -107,5 +110,21 @@ public class MemberController {
         PageResponse<TransactionDto> response = memberService.getMemberTransactionsPaginated(
                 id, principal.getTenantId(), type, page, size);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Reset a member's password (admin action).
+     * Requires RESET_PASSWORD permission.
+     * Sets the member's password to the specified value and forces password change on next login.
+     */
+    @PostMapping("/reset-password")
+    @PreAuthorize("hasAuthority('RESET_PASSWORD') or hasAuthority('FULL_ACCESS')")
+    public ResponseEntity<Map<String, String>> resetMemberPassword(
+            @Valid @RequestBody ResetPasswordRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        log.info("POST /api/members/reset-password - memberId={} by admin memberId={}", 
+                request.getMemberId(), principal.getMemberId());
+        memberService.resetPassword(request.getMemberId(), request.getNewPassword(), principal.getTenantId());
+        return ResponseEntity.ok(Map.of("message", "Password reset successfully. Member will be required to change password on next login."));
     }
 }

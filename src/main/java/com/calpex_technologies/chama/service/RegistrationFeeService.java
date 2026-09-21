@@ -25,6 +25,7 @@ public class RegistrationFeeService {
     private final MemberRepository memberRepository;
     private final TenantRepository tenantRepository;
     private final TransactionRepository transactionRepository;
+    private final PayableRepository payableRepository;
 
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
@@ -73,11 +74,35 @@ public class RegistrationFeeService {
     }
 
     /**
-     * Get all registration fee payments for a tenant
+     * Get all registration fee payments for a tenant (with payableId lookup)
      */
     public List<RegistrationFeePaymentDto> getAllPayments(Long tenantId) {
-        return paymentRepository.findByTenantIdOrderByCreatedAtDesc(tenantId).stream()
-                .map(this::toDto)
+        List<RegistrationFeePayment> payments = paymentRepository.findByTenantIdOrderByCreatedAtDesc(tenantId);
+        
+        // Batch lookup payables with AWAITING_CONFIRMATION status for REGISTRATION_FEE type
+        List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndStatus(
+                tenantId, PayableType.REGISTRATION_FEE, PayableStatus.AWAITING_CONFIRMATION);
+        
+        // Map: memberId -> payableId
+        java.util.Map<Long, Long> memberToPayableId = pendingPayables.stream()
+                .collect(Collectors.toMap(
+                        p -> p.getMember().getId(),
+                        Payable::getId,
+                        (existing, replacement) -> existing // keep first if duplicate
+                ));
+        
+        return payments.stream()
+                .map(payment -> {
+                    RegistrationFeePaymentDto dto = toDto(payment);
+                    Long memberId = payment.getMember().getId();
+                    if (memberToPayableId.containsKey(memberId)) {
+                        dto.setHasPendingClaim(true);
+                        dto.setPayableId(memberToPayableId.get(memberId));
+                    } else {
+                        dto.setHasPendingClaim(false);
+                    }
+                    return dto;
+                })
                 .collect(Collectors.toList());
     }
 

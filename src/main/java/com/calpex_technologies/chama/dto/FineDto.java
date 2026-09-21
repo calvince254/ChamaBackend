@@ -22,4 +22,6 @@ public class FineDto {
     private String imposedByName;
     private String paidAt;
     private BigDecimal paidAmount;
+    private boolean hasPendingClaim; // True if there's a payment claim awaiting confirmation
+    private Long payableId; // ID of the Payable record for confirming payments
 }

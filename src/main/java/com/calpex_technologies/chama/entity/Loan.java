@@ -78,7 +78,7 @@ public class Loan extends TenantAwareEntity {
     @Builder.Default
     private LoanStatus status = LoanStatus.PENDING;
 
-    // Guarantor approval tracking (Phase 1 - parallel)
+    // Guarantor approval tracking (Phase 1 - sequential)
     @Column(name = "required_guarantors")
     @Builder.Default
     private Integer requiredGuarantors = 0; // Snapshot from product at loan creation
@@ -86,6 +86,10 @@ public class Loan extends TenantAwareEntity {
     @Column(name = "guarantors_approved_count")
     @Builder.Default
     private Integer guarantorsApprovedCount = 0; // How many guarantors have approved
+    
+    @Column(name = "current_guarantor_index")
+    @Builder.Default
+    private Integer currentGuarantorIndex = 0; // Index of current guarantor in the guarantors list (0-based)
 
     // Approver approval tracking (Phase 2 - sequential)
     @Column(name = "current_approval_level")
@@ -158,6 +162,15 @@ public class Loan extends TenantAwareEntity {
     // Helper method to check if all guarantors have approved
     public boolean areAllGuarantorsApproved() {
         return guarantorsApprovedCount >= requiredGuarantors;
+    }
+    
+    // Helper method to get the current guarantor who needs to approve
+    public Member getCurrentGuarantor() {
+        int index = currentGuarantorIndex != null ? currentGuarantorIndex : 0;
+        if (guarantors == null || guarantors.isEmpty() || index >= guarantors.size()) {
+            return null;
+        }
+        return guarantors.get(index);
     }
 
     // Helper method to check if loan is fully approved

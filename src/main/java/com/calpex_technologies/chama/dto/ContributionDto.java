@@ -1,5 +1,6 @@
 package com.calpex_technologies.chama.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -26,4 +27,9 @@ public class ContributionDto {
     private boolean penaltyApplied;
     private Long contributionTypeId;
     private String contributionTypeName;
+    
+    @JsonProperty("hasPendingClaim")
+    private Boolean hasPendingClaim; // Changed to Boolean wrapper to ensure proper JSON serialization
+    
+    private Long payableId; // ID of the Payable record for confirming payments
 }

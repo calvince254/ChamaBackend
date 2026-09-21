@@ -233,27 +233,10 @@ public class TenantService {
             selectedRole = rolesMap.get("Admin");  // Fallback to Admin
         }
 
-        // Determine password based on mode
-        String plainPassword;
-        boolean mustChangePassword = false;
-        boolean shouldSendEmail = false;
-        
-        String passwordMode = request.getPasswordMode();
-        if ("default".equalsIgnoreCase(passwordMode)) {
-            // Use default password, require change on first login
-            plainPassword = EmailService.DEFAULT_PASSWORD;
-            mustChangePassword = true;
-            shouldSendEmail = false; // Don't send email for default password
-        } else if ("random".equalsIgnoreCase(passwordMode)) {
-            // Generate random password, send email
-            plainPassword = emailService.generateRandomPassword();
-            mustChangePassword = true;
-            shouldSendEmail = Boolean.TRUE.equals(request.getSendEmail());
-        } else {
-            // Backward compatible - use provided password
-            plainPassword = request.getAdminPassword() != null ? request.getAdminPassword() : "password123";
-            mustChangePassword = false;
-        }
+        // Use provided password or default
+        String plainPassword = request.getAdminPassword() != null && !request.getAdminPassword().isEmpty() 
+                ? request.getAdminPassword() 
+                : "12345678";
 
         // Create first member with selected role
         Member admin = Member.builder()
@@ -269,12 +252,13 @@ public class TenantService {
                 .superAdmin(false)  // Chama admin is NOT a super admin
                 .totalSavings(BigDecimal.ZERO)
                 .totalShares(BigDecimal.ZERO)
-                .mustChangePassword(mustChangePassword)
+                .firstLogin(true)  // Force password change on first login
+                .mustChangePassword(false)  // Will be set to true on first login
                 .build();
         memberRepository.save(admin);
         
-        // Send welcome email with credentials if requested
-        if (shouldSendEmail && request.getAdminEmail() != null && !request.getAdminEmail().isEmpty()) {
+        // Send welcome email with login credentials
+        if (request.getAdminEmail() != null && !request.getAdminEmail().isEmpty()) {
             emailService.sendWelcomeEmail(
                     request.getAdminEmail(),
                     request.getAdminName(),

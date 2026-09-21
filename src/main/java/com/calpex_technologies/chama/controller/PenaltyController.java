@@ -42,11 +42,12 @@ public class PenaltyController {
     public ResponseEntity<PageResponse<PenaltyDto>> getPenaltiesPaginated(
             @AuthenticationPrincipal UserPrincipal principal,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String penaltyType,
             @RequestParam(required = false) Long memberId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size) {
         PageResponse<PenaltyDto> response = penaltyService.getPenaltiesPaginated(
-                principal.getTenantId(), status, memberId, page, size);
+                principal.getTenantId(), status, penaltyType, memberId, page, size);
         return ResponseEntity.ok(response);
     }
 

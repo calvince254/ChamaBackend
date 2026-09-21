@@ -210,49 +210,6 @@ public class LoanController {
     }
 
     /**
-     * Verify a pending payment (admin action).
-     * Permission check: VERIFY_LOAN_PAYMENT (checked on frontend)
-     */
-    @PostMapping("/payments/{paymentId}/verify")
-    public ResponseEntity<LoanPaymentDto> verifyPayment(
-            @PathVariable Long paymentId,
-            @AuthenticationPrincipal UserPrincipal principal) {
-        return ResponseEntity.ok(loanService.verifyPayment(
-                paymentId,
-                principal.getTenantId(),
-                principal.getMemberId()
-        ));
-    }
-
-    /**
-     * Reject a pending payment (admin action).
-     * Permission check: VERIFY_LOAN_PAYMENT (checked on frontend)
-     */
-    @PostMapping("/payments/{paymentId}/reject")
-    public ResponseEntity<LoanPaymentDto> rejectPayment(
-            @PathVariable Long paymentId,
-            @RequestBody Map<String, String> body,
-            @AuthenticationPrincipal UserPrincipal principal) {
-        String reason = body != null ? body.get("reason") : "No reason provided";
-        return ResponseEntity.ok(loanService.rejectPayment(
-                paymentId,
-                reason,
-                principal.getTenantId(),
-                principal.getMemberId()
-        ));
-    }
-
-    /**
-     * Get all pending payments for verification (admin view).
-     * Permission check: VERIFY_LOAN_PAYMENT (checked on frontend)
-     */
-    @GetMapping("/payments/pending")
-    public ResponseEntity<List<LoanPaymentDto>> getPendingPayments(
-            @AuthenticationPrincipal UserPrincipal principal) {
-        return ResponseEntity.ok(loanService.getPendingPayments(principal.getTenantId()));
-    }
-
-    /**
      * Get payment history for a specific loan.
      */
     @GetMapping("/{id}/payments")
@@ -269,16 +226,6 @@ public class LoanController {
     public ResponseEntity<List<LoanPaymentDto>> getMyPayments(
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(loanService.getMyPayments(principal.getMemberId()));
-    }
-
-    /**
-     * Count pending payments (for notification badge).
-     */
-    @GetMapping("/payments/pending/count")
-    public ResponseEntity<Map<String, Long>> countPendingPayments(
-            @AuthenticationPrincipal UserPrincipal principal) {
-        long count = loanService.countPendingPayments(principal.getTenantId());
-        return ResponseEntity.ok(Map.of("count", count));
     }
 
     // ==================== PENALTIES ====================

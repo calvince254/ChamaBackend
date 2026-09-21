@@ -23,6 +23,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -41,6 +44,8 @@ public class LoanService {
     private final RoleRepository roleRepository;
     private final ContributionRepository contributionRepository;
     private final LoanPaymentRepository loanPaymentRepository;
+    private final PayableRepository payableRepository;
+    private final PaymentClaimRepository paymentClaimRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -49,9 +54,8 @@ public class LoanService {
     // ==================== GET METHODS ====================
 
     public List<LoanDto> getAllLoans(Long tenantId) {
-        return loanRepository.findByTenantIdOrderByCreatedAtDesc(tenantId).stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<Loan> loans = loanRepository.findByTenantIdOrderByCreatedAtDesc(tenantId);
+        return toDtoListWithPendingClaims(loans, tenantId);
     }
     
     /**
@@ -70,7 +74,31 @@ public class LoanService {
             loanPage = loanRepository.findByTenantIdOrderByCreatedAtDesc(tenantId, pageable);
         }
         
-        Page<LoanDto> dtoPage = loanPage.map(this::toDto);
+        // Batch fetch pending claims for this page (with payableIds)
+        List<Loan> loans = loanPage.getContent();
+        List<Long> activeIds = loans.stream()
+                .filter(l -> l.getStatus() == Loan.LoanStatus.ACTIVE || l.getStatus() == Loan.LoanStatus.OVERDUE)
+                .map(Loan::getId)
+                .collect(Collectors.toList());
+        
+        // Map loanId -> payableId for pending claims
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        Map<Long, BigDecimal> pendingPaymentAmounts = new java.util.HashMap<>();
+        if (!activeIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.LOAN_REPAYMENT, activeIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable payable : pendingPayables) {
+                pendingClaimPayableIds.put(payable.getPayableRefId(), payable.getId());
+                pendingPaymentAmounts.put(payable.getPayableRefId(), payable.getAmount());
+            }
+        }
+        
+        Page<LoanDto> dtoPage = loanPage.map(l -> {
+            boolean hasPendingClaim = pendingClaimPayableIds.containsKey(l.getId());
+            Long payableId = pendingClaimPayableIds.get(l.getId());
+            BigDecimal pendingAmount = pendingPaymentAmounts.get(l.getId());
+            return toDto(l, hasPendingClaim, payableId, pendingAmount);
+        });
         return PageResponse.from(dtoPage);
     }
     
@@ -82,34 +110,71 @@ public class LoanService {
         Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
         
         Page<Loan> loanPage = loanRepository.findByMemberIdOrderByCreatedAtDesc(memberId, pageable);
-        Page<LoanDto> dtoPage = loanPage.map(this::toDto);
+        
+        // Batch fetch pending claims for this page (with payableIds)
+        List<Loan> loans = loanPage.getContent();
+        List<Long> activeIds = loans.stream()
+                .filter(l -> l.getStatus() == Loan.LoanStatus.ACTIVE || l.getStatus() == Loan.LoanStatus.OVERDUE)
+                .map(Loan::getId)
+                .collect(Collectors.toList());
+        
+        // Map loanId -> payableId for pending claims
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        Map<Long, BigDecimal> pendingPaymentAmounts = new java.util.HashMap<>();
+        if (!activeIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.LOAN_REPAYMENT, activeIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable payable : pendingPayables) {
+                pendingClaimPayableIds.put(payable.getPayableRefId(), payable.getId());
+                pendingPaymentAmounts.put(payable.getPayableRefId(), payable.getAmount());
+            }
+        }
+        
+        Page<LoanDto> dtoPage = loanPage.map(l -> {
+            boolean hasPendingClaim = pendingClaimPayableIds.containsKey(l.getId());
+            Long payableId = pendingClaimPayableIds.get(l.getId());
+            BigDecimal pendingAmount = pendingPaymentAmounts.get(l.getId());
+            return toDto(l, hasPendingClaim, payableId, pendingAmount);
+        });
         return PageResponse.from(dtoPage);
     }
 
     public List<LoanDto> getMyLoans(Long tenantId, Long memberId) {
-        return loanRepository.findByMemberIdOrderByCreatedAtDesc(memberId).stream()
+        List<Loan> loans = loanRepository.findByMemberIdOrderByCreatedAtDesc(memberId).stream()
                 .filter(l -> l.getTenant().getId().equals(tenantId))
-                .map(this::toDto)
                 .collect(Collectors.toList());
+        return toDtoListWithPendingClaims(loans, tenantId);
     }
 
     public List<LoanDto> getPendingApprovals(Long tenantId, Long memberId) {
+        log.info("=== getPendingApprovals DEBUG ===");
+        log.info("tenantId={}, memberId={}", tenantId, memberId);
+        
         // Get all loans pending approval (includes PENDING_GUARANTORS, PENDING, PENDING_APPROVAL)
         List<Loan> pendingLoans = loanRepository.findAwaitingApprovalByTenantId(tenantId);
+        log.info("Found {} pending loans", pendingLoans.size());
         
-        // Filter to only loans where this member is a pending guarantor OR next approver
-        return pendingLoans.stream()
+        // Get the member to check their role
+        Member currentMember = memberRepository.findById(memberId).orElse(null);
+        boolean isAdmin = currentMember != null && currentMember.getRole() != null && 
+                currentMember.getRole().getPermissions().stream()
+                        .anyMatch(p -> "LOANS".equalsIgnoreCase(p.getModule()) && p.isCanApprove());
+        log.info("currentMember={}, isAdmin={}", currentMember != null ? currentMember.getName() : "null", isAdmin);
+        
+        // Filter to only loans where this member is the CURRENT guarantor OR next approver (sequential)
+        List<LoanDto> result = pendingLoans.stream()
                 .filter(loan -> {
-                    // Check if member is a pending guarantor for this loan (Phase 1)
+                    log.info("Checking loan {} (status={})", loan.getId(), loan.getStatus());
+                    
+                    // Check if member is the CURRENT guarantor for this loan (Phase 1 - sequential)
                     if (loan.getStatus() == Loan.LoanStatus.PENDING_GUARANTORS) {
-                        // Check if this member is in the guarantors list and hasn't approved yet
-                        boolean isGuarantor = loan.getGuarantors().stream()
-                                .anyMatch(g -> g.getId().equals(memberId));
-                        if (isGuarantor) {
-                            // Check if they've already approved as guarantor
-                            boolean alreadyApproved = loanApprovalRepository.existsGuarantorApproval(loan.getId(), memberId);
-                            if (!alreadyApproved) {
-                                return true; // Show this loan - member is pending guarantor
+                        Member currentGuarantor = loan.getCurrentGuarantor();
+                        if (currentGuarantor != null) {
+                            boolean isCurrentGuarantor = currentGuarantor.getId().equals(memberId);
+                            log.info("  PENDING_GUARANTORS: currentGuarantor={}, isCurrentGuarantor={}", 
+                                    currentGuarantor.getName(), isCurrentGuarantor);
+                            if (isCurrentGuarantor) {
+                                return true; // Show this loan - member is the current guarantor in sequence
                             }
                         }
                     }
@@ -117,29 +182,55 @@ public class LoanService {
                     // Check if member is the next approver (Phase 2 - sequential approval)
                     if (loan.getStatus() == Loan.LoanStatus.PENDING || 
                         loan.getStatus() == Loan.LoanStatus.PENDING_APPROVAL) {
-                        if (loan.getLoanProduct() == null) return false;
+                        
+                        // If no loan product, check if user has APPROVE_LOAN permission
+                        if (loan.getLoanProduct() == null) {
+                            log.info("  No loan product, using isAdmin check: {}", isAdmin);
+                            return isAdmin;
+                        }
                         
                         int nextLevel = loan.getCurrentApprovalLevel() + 1;
+                        log.info("  PENDING/PENDING_APPROVAL: nextLevel={}, requiredLevels={}", nextLevel, loan.getRequiredApprovalLevels());
+                        
+                        // If no approval levels are configured (requiredApprovalLevels = 0), allow anyone with APPROVE_LOAN
+                        if (loan.getRequiredApprovalLevels() == 0) {
+                            log.info("  No approval levels configured, using isAdmin check: {}", isAdmin);
+                            return isAdmin;
+                        }
+                        
                         return approvalLevelRepository.findByLoanProductIdAndLevel(loan.getLoanProduct().getId(), nextLevel)
                                 .map(level -> {
+                                    log.info("  Found approval level: member={}, role={}", 
+                                            level.getMember() != null ? level.getMember().getName() : "null",
+                                            level.getRole() != null ? level.getRole().getName() : "null");
                                     // Check if this specific member is the approver
                                     if (level.getMember() != null) {
-                                        return level.getMember().getId().equals(memberId);
+                                        boolean match = level.getMember().getId().equals(memberId);
+                                        log.info("  Member check: {}", match);
+                                        return match;
                                     }
                                     // Fallback to role-based check
-                                    Member member = memberRepository.findById(memberId).orElse(null);
-                                    if (member != null && member.getRole() != null && level.getRole() != null) {
-                                        return level.getRole().getId().equals(member.getRole().getId());
+                                    if (currentMember != null && currentMember.getRole() != null && level.getRole() != null) {
+                                        boolean match = level.getRole().getId().equals(currentMember.getRole().getId());
+                                        log.info("  Role check: {}", match);
+                                        return match;
                                     }
                                     return false;
                                 })
-                                .orElse(false);
+                                .orElseGet(() -> {
+                                    // No approval level found for this level - allow admin
+                                    log.info("  No approval level found for level {}, using isAdmin: {}", nextLevel, isAdmin);
+                                    return isAdmin;
+                                });
                     }
                     
                     return false;
                 })
                 .map(this::toDto)
                 .collect(Collectors.toList());
+        
+        log.info("Returning {} pending approvals", result.size());
+        return result;
     }
 
     public LoanDto getLoan(Long id, Long tenantId) {
@@ -384,23 +475,29 @@ public class LoanService {
         Member guarantor = memberRepository.findById(guarantorId)
                 .orElseThrow(() -> new RuntimeException("Guarantor not found"));
 
-        // Verify this member is a guarantor for this loan
-        boolean isGuarantor = loan.getGuarantors().stream()
-                .anyMatch(g -> g.getId().equals(guarantorId));
-        if (!isGuarantor) {
-            throw new RuntimeException("You are not a guarantor for this loan");
+        // Get the current guarantor who should approve (sequential order)
+        Member currentGuarantor = loan.getCurrentGuarantor();
+        if (currentGuarantor == null) {
+            throw new RuntimeException("No more guarantors pending");
+        }
+        
+        // Verify this member is the CURRENT guarantor in sequence
+        if (!currentGuarantor.getId().equals(guarantorId)) {
+            throw new RuntimeException("It's not your turn to approve. Waiting for " + currentGuarantor.getName() + " to approve first.");
         }
 
-        // Check if already approved
+        // Check if already approved (safety check)
         if (loanApprovalRepository.existsGuarantorApproval(loanId, guarantorId)) {
             throw new RuntimeException("You have already approved this loan as guarantor");
         }
 
-        // Record the guarantor approval
+        // Record the guarantor approval with level = currentGuarantorIndex + 1 (1-based)
+        int currentIndex = loan.getCurrentGuarantorIndex() != null ? loan.getCurrentGuarantorIndex() : 0;
+        int guarantorLevel = currentIndex + 1;
         LoanApproval approval = LoanApproval.builder()
                 .loan(loan)
                 .approvalType(LoanApproval.ApprovalType.GUARANTOR)
-                .level(null) // Guarantors don't have levels
+                .level(guarantorLevel)
                 .approver(guarantor)
                 .approverRole(guarantor.getRole())
                 .action(LoanApproval.ApprovalAction.APPROVED)
@@ -409,8 +506,10 @@ public class LoanService {
                 .build();
         loanApprovalRepository.save(approval);
 
-        // Update guarantor count
-        loan.setGuarantorsApprovedCount(loan.getGuarantorsApprovedCount() + 1);
+        // Update guarantor count and move to next guarantor
+        int approvedCount = loan.getGuarantorsApprovedCount() != null ? loan.getGuarantorsApprovedCount() : 0;
+        loan.setGuarantorsApprovedCount(approvedCount + 1);
+        loan.setCurrentGuarantorIndex(currentIndex + 1);
 
         // Check if all guarantors have approved
         if (loan.areAllGuarantorsApproved()) {
@@ -424,8 +523,9 @@ public class LoanService {
                 log.info("Loan {} fully approved (no approvers required)", loanId);
             }
         } else {
-            log.info("Loan {} - guarantor {} approved ({}/{})", loanId, guarantor.getName(), 
-                    loan.getGuarantorsApprovedCount(), loan.getRequiredGuarantors());
+            Member nextGuarantor = loan.getGuarantors().get(loan.getCurrentGuarantorIndex());
+            log.info("Loan {} - guarantor {} approved ({}/{}), next: {}", loanId, guarantor.getName(), 
+                    loan.getGuarantorsApprovedCount(), loan.getRequiredGuarantors(), nextGuarantor.getName());
         }
 
         loan = loanRepository.save(loan);
@@ -515,13 +615,20 @@ public class LoanService {
             if (loan.getStatus() != Loan.LoanStatus.PENDING_GUARANTORS) {
                 throw new RuntimeException("Loan is not awaiting guarantor approval");
             }
-            // Verify this member is a guarantor
-            boolean isGuarantor = loan.getGuarantors().stream()
-                    .anyMatch(g -> g.getId().equals(rejecterId));
-            if (!isGuarantor) {
+            // Verify this member is a guarantor and get their position
+            int guarantorIndex = -1;
+            List<Member> guarantors = loan.getGuarantors();
+            for (int i = 0; i < guarantors.size(); i++) {
+                if (guarantors.get(i).getId().equals(rejecterId)) {
+                    guarantorIndex = i;
+                    break;
+                }
+            }
+            if (guarantorIndex < 0) {
                 throw new RuntimeException("You are not a guarantor for this loan");
             }
             approvalType = LoanApproval.ApprovalType.GUARANTOR;
+            level = guarantorIndex + 1; // 1-based index for guarantors
         } else {
             if (loan.getStatus() != Loan.LoanStatus.PENDING && loan.getStatus() != Loan.LoanStatus.PENDING_APPROVAL) {
                 throw new RuntimeException("Loan is not pending approval");
@@ -690,6 +797,7 @@ public class LoanService {
             loan.setStatus(Loan.LoanStatus.CLEARED);
             loan.setBalanceOutstanding(BigDecimal.ZERO);
             loan.setClearedDate(LocalDate.now());
+            loan.setNextDueDate(null);
             
             // Ensure processing fee is fully marked as paid
             if (loan.getProcessingFee() != null) {
@@ -879,6 +987,7 @@ public class LoanService {
             loan.setStatus(Loan.LoanStatus.CLEARED);
             loan.setBalanceOutstanding(BigDecimal.ZERO);
             loan.setClearedDate(LocalDate.now());
+            loan.setNextDueDate(null);
             if (loan.getProcessingFee() != null) {
                 loan.setProcessingFeePaid(loan.getProcessingFee());
             }
@@ -1080,6 +1189,26 @@ public class LoanService {
     }
 
     private LoanDto toDto(Loan loan) {
+        // For single loan lookup, do individual query for pending claim
+        boolean hasPendingClaim = false;
+        Long payableId = null;
+        BigDecimal pendingAmount = null;
+        if (loan.getStatus() == Loan.LoanStatus.ACTIVE || loan.getStatus() == Loan.LoanStatus.OVERDUE) {
+            Optional<Payable> payableOpt = payableRepository.findByPayableTypeAndPayableRefId(PayableType.LOAN_REPAYMENT, loan.getId());
+            if (payableOpt.isPresent() && payableOpt.get().getStatus() == PayableStatus.AWAITING_CONFIRMATION) {
+                hasPendingClaim = true;
+                payableId = payableOpt.get().getId();
+                pendingAmount = payableOpt.get().getAmount();
+            }
+        }
+        return toDto(loan, hasPendingClaim, payableId, pendingAmount);
+    }
+    
+    private LoanDto toDto(Loan loan, boolean hasPendingClaim) {
+        return toDto(loan, hasPendingClaim, null, null);
+    }
+    
+    private LoanDto toDto(Loan loan, boolean hasPendingClaim, Long payableId, BigDecimal pendingPaymentAmount) {
         // Get all approvals ordered by type (guarantors first) then level
         List<LoanApproval> approvals = loanApprovalRepository.findByLoanIdOrderByTypeAndLevel(loan.getId());
         
@@ -1101,27 +1230,55 @@ public class LoanService {
         // Determine pending approval info
         String pendingApprovalRole = null;
         String pendingApprovalType = null;
+        String approvalProgress = null;
         List<String> pendingGuarantorNames = new ArrayList<>();
         
         if (loan.getStatus() == Loan.LoanStatus.PENDING_GUARANTORS) {
             pendingApprovalType = "GUARANTOR";
-            // Get names of guarantors who haven't approved yet
-            List<Long> approvedGuarantorIds = loanApprovalRepository.findGuarantorApprovalsByLoanId(loan.getId())
-                    .stream()
-                    .map(a -> a.getApprover().getId())
-                    .collect(Collectors.toList());
             
-            pendingGuarantorNames = loan.getGuarantors().stream()
-                    .filter(g -> !approvedGuarantorIds.contains(g.getId()))
-                    .map(Member::getName)
-                    .collect(Collectors.toList());
+            // Get the CURRENT guarantor who needs to approve (sequential flow)
+            Member currentGuarantor = loan.getCurrentGuarantor();
+            if (currentGuarantor != null) {
+                pendingApprovalRole = currentGuarantor.getName();
+            }
             
-            pendingApprovalRole = pendingGuarantorNames.size() + " Guarantor(s)";
+            // Get ALL remaining guarantors (current and future) for display
+            List<Member> allGuarantors = loan.getGuarantors();
+            int currentIndex = loan.getCurrentGuarantorIndex() != null ? loan.getCurrentGuarantorIndex() : 0;
+            if (allGuarantors != null && currentIndex < allGuarantors.size()) {
+                // Add all guarantors from current index onwards (those who haven't approved yet)
+                for (int i = currentIndex; i < allGuarantors.size(); i++) {
+                    Member guarantor = allGuarantors.get(i);
+                    if (guarantor != null) {
+                        pendingGuarantorNames.add(guarantor.getName());
+                    }
+                }
+            }
+            
+            // Build approval progress message
+            int approved = loan.getGuarantorsApprovedCount() != null ? loan.getGuarantorsApprovedCount() : 0;
+            int required = loan.getRequiredGuarantors() != null ? loan.getRequiredGuarantors() : 0;
+            if (currentGuarantor != null) {
+                approvalProgress = String.format("Waiting for %s (%d/%d guarantors approved)", 
+                        currentGuarantor.getName(), approved, required);
+            } else {
+                approvalProgress = String.format("%d/%d guarantors approved", approved, required);
+            }
+            
+            // Also show remaining guarantors info for display
+            int remaining = required - approved;
+            if (remaining > 1) {
+                pendingApprovalRole = currentGuarantor != null 
+                    ? currentGuarantor.getName() + " (+" + (remaining - 1) + " more after)"
+                    : remaining + " Guarantor(s) remaining";
+            }
         } else if (loan.getStatus() == Loan.LoanStatus.PENDING || loan.getStatus() == Loan.LoanStatus.PENDING_APPROVAL) {
             pendingApprovalType = "APPROVER";
-            if (loan.getLoanProduct() != null) {
-                int nextLevel = loan.getCurrentApprovalLevel() + 1;
-                pendingApprovalRole = approvalLevelRepository.findByLoanProductIdAndLevel(loan.getLoanProduct().getId(), nextLevel)
+            int nextLevel = loan.getCurrentApprovalLevel() + 1;
+            int requiredLevels = loan.getRequiredApprovalLevels();
+            
+            if (loan.getLoanProduct() != null && requiredLevels > 0) {
+                String nextApproverName = approvalLevelRepository.findByLoanProductIdAndLevel(loan.getLoanProduct().getId(), nextLevel)
                         .map(level -> {
                             if (level.getMember() != null) {
                                 return level.getMember().getName();
@@ -1131,7 +1288,39 @@ public class LoanService {
                             return "Level " + nextLevel;
                         })
                         .orElse("Level " + nextLevel);
+                
+                pendingApprovalRole = nextApproverName;
+                
+                // Build approval progress
+                int guarantorsApproved = loan.getGuarantorsApprovedCount() != null ? loan.getGuarantorsApprovedCount() : 0;
+                int guarantorsRequired = loan.getRequiredGuarantors() != null ? loan.getRequiredGuarantors() : 0;
+                int approversApproved = loan.getCurrentApprovalLevel() != null ? loan.getCurrentApprovalLevel() : 0;
+                
+                if (guarantorsRequired > 0) {
+                    approvalProgress = String.format("%d/%d guarantors ✓, waiting for %s (%d/%d approvers)", 
+                            guarantorsApproved, guarantorsRequired, nextApproverName, approversApproved, requiredLevels);
+                } else {
+                    approvalProgress = String.format("Waiting for %s (%d/%d approvers)", 
+                            nextApproverName, approversApproved, requiredLevels);
+                }
+                
+                // Show how many levels remain
+                int remaining = requiredLevels - approversApproved;
+                if (remaining > 1) {
+                    pendingApprovalRole = pendingApprovalRole + " (+" + (remaining - 1) + " more after)";
+                }
+            } else {
+                pendingApprovalRole = "Admin Approval";
+                approvalProgress = "Waiting for admin approval";
             }
+        } else if (loan.getStatus() == Loan.LoanStatus.APPROVED) {
+            approvalProgress = "Fully approved, awaiting disbursement";
+        } else if (loan.getStatus() == Loan.LoanStatus.ACTIVE) {
+            approvalProgress = "Loan active";
+        } else if (loan.getStatus() == Loan.LoanStatus.CLEARED) {
+            approvalProgress = "Loan cleared";
+        } else if (loan.getStatus() == Loan.LoanStatus.REJECTED) {
+            approvalProgress = "Loan rejected";
         }
 
         LoanDto.LoanDtoBuilder builder = LoanDto.builder()
@@ -1154,9 +1343,14 @@ public class LoanService {
                 .processingFeeDeductionType(loan.getProcessingFeeDeductionType() != null 
                         ? loan.getProcessingFeeDeductionType().name() : null)
                 .status(loan.getStatus().name())
+                .hasPendingClaim(hasPendingClaim)
+                .payableId(payableId)
+                .pendingPaymentAmount(pendingPaymentAmount)
                 .requiredGuarantors(loan.getRequiredGuarantors())
                 .guarantorsApprovedCount(loan.getGuarantorsApprovedCount())
+                .currentGuarantorIndex(loan.getCurrentGuarantorIndex())
                 .pendingGuarantorNames(pendingGuarantorNames)
+                .approvalProgress(approvalProgress)
                 .currentApprovalLevel(loan.getCurrentApprovalLevel())
                 .requiredApprovalLevels(loan.getRequiredApprovalLevels())
                 .pendingApprovalRole(pendingApprovalRole)
@@ -1203,6 +1397,40 @@ public class LoanService {
                     .orElse("Level " + level);
         }
         return "Level " + level;
+    }
+    
+    /**
+     * Convert list of loans to DTOs with batch pending claim lookup.
+     */
+    private List<LoanDto> toDtoListWithPendingClaims(List<Loan> loans, Long tenantId) {
+        if (loans.isEmpty()) return List.of();
+        
+        // Get IDs of active/overdue loans
+        List<Long> activeIds = loans.stream()
+                .filter(l -> l.getStatus() == Loan.LoanStatus.ACTIVE || l.getStatus() == Loan.LoanStatus.OVERDUE)
+                .map(Loan::getId)
+                .collect(Collectors.toList());
+        
+        // Batch fetch payables with pending claims (maps loanId -> payableId and loanId -> amount)
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        Map<Long, BigDecimal> pendingPaymentAmounts = new java.util.HashMap<>();
+        if (!activeIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.LOAN_REPAYMENT, activeIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable payable : pendingPayables) {
+                pendingClaimPayableIds.put(payable.getPayableRefId(), payable.getId());
+                pendingPaymentAmounts.put(payable.getPayableRefId(), payable.getAmount());
+            }
+        }
+        
+        return loans.stream()
+                .map(l -> {
+                    boolean hasPendingClaim = pendingClaimPayableIds.containsKey(l.getId());
+                    Long payableId = pendingClaimPayableIds.get(l.getId());
+                    BigDecimal pendingAmount = pendingPaymentAmounts.get(l.getId());
+                    return toDto(l, hasPendingClaim, payableId, pendingAmount);
+                })
+                .collect(Collectors.toList());
     }
     
     // ==================== LOAN INCOME ====================

@@ -112,6 +112,8 @@ public class RegistrationFeeController {
 
     /**
      * Verify (confirm) registration fee payment (admin action)
+     * NOTE: Registration fee uses its own entity (RegistrationFeePayment), not the unified Payable system.
+     * This endpoint is kept for backward compatibility. Use VERIFY_PAYMENTS permission.
      */
     @PostMapping("/{paymentId}/verify")
     public ResponseEntity<RegistrationFeePaymentDto> verifyPayment(
@@ -126,6 +128,7 @@ public class RegistrationFeeController {
 
     /**
      * Reject registration fee payment (admin action)
+     * NOTE: Registration fee uses its own entity (RegistrationFeePayment), not the unified Payable system.
      */
     @PostMapping("/{paymentId}/reject")
     public ResponseEntity<RegistrationFeePaymentDto> rejectPayment(

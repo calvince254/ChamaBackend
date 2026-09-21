@@ -147,27 +147,10 @@ public class MemberService {
             role = roleRepository.findByNameAndTenantId("Member", tenantId).orElse(null);
         }
 
-        // Determine password based on mode
-        String plainPassword;
-        boolean mustChangePassword = false;
-        boolean shouldSendEmail = false;
-        
-        String passwordMode = request.getPasswordMode();
-        if ("default".equalsIgnoreCase(passwordMode)) {
-            // Use default password, require change on first login
-            plainPassword = EmailService.DEFAULT_PASSWORD;
-            mustChangePassword = true;
-            shouldSendEmail = false; // Don't send email for default password
-        } else if ("random".equalsIgnoreCase(passwordMode)) {
-            // Generate random password, send email
-            plainPassword = emailService.generateRandomPassword();
-            mustChangePassword = true;
-            shouldSendEmail = Boolean.TRUE.equals(request.getSendEmail());
-        } else {
-            // Backward compatible - use provided password
-            plainPassword = request.getPassword() != null ? request.getPassword() : "password123";
-            mustChangePassword = false;
-        }
+        // Use provided password or default
+        String plainPassword = request.getPassword() != null && !request.getPassword().isEmpty() 
+                ? request.getPassword() 
+                : "12345678";
 
         Member member = Member.builder()
                 .name(request.getName())
@@ -179,13 +162,14 @@ public class MemberService {
                 .status(Member.MemberStatus.ACTIVE)
                 .role(role)
                 .tenant(tenant)
-                .mustChangePassword(mustChangePassword)
+                .firstLogin(true)  // Force password change on first login
+                .mustChangePassword(false)  // Will be set to true on first login
                 .build();
 
         member = memberRepository.save(member);
         
-        // Send welcome email with credentials if requested
-        if (shouldSendEmail && request.getEmail() != null && !request.getEmail().isEmpty()) {
+        // Send welcome email with login credentials
+        if (request.getEmail() != null && !request.getEmail().isEmpty()) {
             emailService.sendWelcomeEmail(
                     request.getEmail(),
                     request.getName(),
@@ -577,6 +561,37 @@ public class MemberService {
                 .direction(t.getDirection().name())
                 .build());
         return PageResponse.from(dtoPage);
+    }
+
+    /**
+     * Reset a member's password (admin action).
+     * Sets the password to the specified value and forces the member to change it on next login.
+     */
+    @Transactional
+    public void resetPassword(Long memberId, String newPassword, Long tenantId) {
+        Member member = memberRepository.findByIdAndTenantId(memberId, tenantId)
+                .orElseThrow(() -> new RuntimeException("Member not found"));
+        
+        log.info("Resetting password for member {} (ID: {})", member.getName(), memberId);
+        
+        // Set the new password (encoded)
+        member.setPassword(passwordEncoder.encode(newPassword));
+        
+        // Force password change on next login
+        member.setMustChangePassword(true);
+        
+        memberRepository.save(member);
+        
+        // Send password reset email
+        if (member.getEmail() != null && !member.getEmail().isEmpty()) {
+            emailService.sendPasswordResetEmail(
+                    member.getEmail(),
+                    member.getName(),
+                    newPassword
+            );
+        }
+        
+        log.info("Password reset completed for member {} - email sent, mustChangePassword set to true", member.getName());
     }
 
     private MemberDto toDto(Member member) {

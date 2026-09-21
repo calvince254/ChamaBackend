@@ -27,7 +27,7 @@ public class Penalty {
     private Member member;
     
     @Enumerated(EnumType.STRING)
-    @Column(name = "penalty_type", nullable = false, length = 30)
+    @Column(name = "penalty_type", nullable = false, length = 50)
     private PenaltyType penaltyType;
     
     @Column(nullable = false)
@@ -76,8 +76,9 @@ public class Penalty {
     }
     
     public enum PenaltyType {
-        MEETING_ABSENT,    // Absent from meeting
-        LATE_PAYMENT       // Late contribution payment
+        MEETING_ABSENT,           // Absent from meeting
+        MEETING_LATE_ARRIVAL,     // Late arrival to meeting
+        CONTRIBUTION_LATE_PAYMENT // Late contribution payment (auto-imposed)
     }
     
     public enum PenaltyStatus {

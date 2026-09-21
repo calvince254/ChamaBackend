@@ -27,6 +27,17 @@ public class PayoutController {
         return ResponseEntity.ok(payoutService.calculateLiquidity(principal.getTenantId()));
     }
 
+    /**
+     * Get guarantor liabilities for a specific member.
+     * Shows all active loans where the member is a guarantor and their liability amounts.
+     */
+    @GetMapping("/guarantor-liabilities/{memberId}")
+    public ResponseEntity<List<GuarantorLiabilityDto>> getGuarantorLiabilities(
+            @PathVariable Long memberId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(payoutService.getGuarantorLiabilities(memberId, principal.getTenantId()));
+    }
+
     // ==================== PAYOUT PREVIEW ====================
 
     /**
@@ -40,7 +51,9 @@ public class PayoutController {
                 principal.getTenantId(),
                 request.getPayoutType(),
                 request.getAmount(),
-                request.getMemberId()));
+                request.getMemberId(),
+                request.getUseOwnershipDistribution(),
+                request.getDistributionPercentage()));
     }
 
     // ==================== CRUD ====================

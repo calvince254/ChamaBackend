@@ -159,6 +159,7 @@ public class DataInitializer implements CommandLineRunner {
                     "VIEW_WELFARE_EVENTS",
                     "VIEW_INVESTMENTS",
                     "VIEW_MERRY_GO_ROUND",
+                    "VIEW_MY_MGR_FINES",  // Members can view their own MGR fines
                     "APPLY_FOR_LOAN"  // Members should be able to apply for loans
                 );
                 

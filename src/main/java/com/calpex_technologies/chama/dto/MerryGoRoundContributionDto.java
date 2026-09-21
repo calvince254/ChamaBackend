@@ -26,4 +26,6 @@ public class MerryGoRoundContributionDto {
     private String paymentReference;
     private Boolean isOverdue;
     private Boolean hasFine; // Whether a fine has been imposed for this contribution
+    private Boolean hasPendingClaim; // Whether there's a pending payment claim
+    private Long payableId; // ID of the Payable record for confirming payments
 }

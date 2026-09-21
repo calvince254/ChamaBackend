@@ -25,4 +25,6 @@ public class MerryGoRoundFineDto {
     private Boolean autoImposed;
     private String waivedBy;
     private String waiveReason;
+    private Boolean hasPendingClaim; // Whether there's a pending payment claim
+    private Long payableId; // ID of the Payable record for confirming payments
 }

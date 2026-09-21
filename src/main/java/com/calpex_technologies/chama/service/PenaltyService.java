@@ -14,6 +14,8 @@ import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -29,37 +31,81 @@ public class PenaltyService {
     private final ContributionTypeRepository contributionTypeRepository;
     private final FineTypeRepository fineTypeRepository;
     private final TransactionRepository transactionRepository;
+    private final PayableRepository payableRepository;
+    private final PaymentClaimRepository paymentClaimRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     public List<PenaltyDto> getAllPenalties(Long tenantId) {
-        return penaltyRepository.findByTenantIdOrderByImposedAtDesc(tenantId)
-                .stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<Penalty> penalties = penaltyRepository.findByTenantIdOrderByImposedAtDesc(tenantId);
+        return toDtoListWithPendingClaims(penalties, tenantId);
     }
     
     /**
      * Get penalties with pagination.
+     * @param penaltyType Filter by penalty type: LATE_PAYMENT, MEETING_ABSENT
      */
     public com.calpex_technologies.chama.dto.PageResponse<PenaltyDto> getPenaltiesPaginated(
-            Long tenantId, String status, Long memberId, int page, int size) {
+            Long tenantId, String status, String penaltyType, Long memberId, int page, int size) {
         if (size <= 0) size = 10;
         org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
                 page, size, org.springframework.data.domain.Sort.by("imposedAt").descending());
         
         org.springframework.data.domain.Page<Penalty> penaltyPage;
         
-        if (memberId != null) {
+        // Parse penalty type filter
+        Penalty.PenaltyType typeFilter = null;
+        if (penaltyType != null && !penaltyType.equalsIgnoreCase("ALL") && !penaltyType.trim().isEmpty()) {
+            typeFilter = Penalty.PenaltyType.valueOf(penaltyType.toUpperCase());
+        }
+        
+        // Parse status filter
+        Penalty.PenaltyStatus statusFilter = null;
+        if (status != null && !status.equalsIgnoreCase("ALL") && !status.trim().isEmpty()) {
+            statusFilter = Penalty.PenaltyStatus.valueOf(status.toUpperCase());
+        }
+        
+        // Build query based on filters
+        if (memberId != null && typeFilter != null && statusFilter != null) {
+            penaltyPage = penaltyRepository.findByTenantIdAndMemberIdAndPenaltyTypeAndStatus(tenantId, memberId, typeFilter, statusFilter, pageable);
+        } else if (memberId != null && typeFilter != null) {
+            penaltyPage = penaltyRepository.findByTenantIdAndMemberIdAndPenaltyType(tenantId, memberId, typeFilter, pageable);
+        } else if (memberId != null && statusFilter != null) {
+            penaltyPage = penaltyRepository.findByTenantIdAndMemberIdAndStatus(tenantId, memberId, statusFilter, pageable);
+        } else if (memberId != null) {
             penaltyPage = penaltyRepository.findByTenantIdAndMemberId(tenantId, memberId, pageable);
-        } else if (status != null && !status.equalsIgnoreCase("ALL") && !status.trim().isEmpty()) {
-            Penalty.PenaltyStatus penaltyStatus = Penalty.PenaltyStatus.valueOf(status.toUpperCase());
-            penaltyPage = penaltyRepository.findByTenantIdAndStatus(tenantId, penaltyStatus, pageable);
+        } else if (typeFilter != null && statusFilter != null) {
+            penaltyPage = penaltyRepository.findByTenantIdAndPenaltyTypeAndStatus(tenantId, typeFilter, statusFilter, pageable);
+        } else if (typeFilter != null) {
+            penaltyPage = penaltyRepository.findByTenantIdAndPenaltyType(tenantId, typeFilter, pageable);
+        } else if (statusFilter != null) {
+            penaltyPage = penaltyRepository.findByTenantIdAndStatus(tenantId, statusFilter, pageable);
         } else {
             penaltyPage = penaltyRepository.findByTenantIdOrderByImposedAtDesc(tenantId, pageable);
         }
         
-        org.springframework.data.domain.Page<PenaltyDto> dtoPage = penaltyPage.map(this::toDto);
+        // Batch fetch pending claims for this page
+        List<Penalty> penalties = penaltyPage.getContent();
+        List<Long> unpaidIds = penalties.stream()
+                .filter(p -> p.getStatus() != Penalty.PenaltyStatus.PAID && p.getStatus() != Penalty.PenaltyStatus.WAIVED)
+                .map(Penalty::getId)
+                .collect(Collectors.toList());
+        
+        // Get pending payables with their IDs
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        if (!unpaidIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.PENALTY, unpaidIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable payable : pendingPayables) {
+                pendingClaimPayableIds.put(payable.getPayableRefId(), payable.getId());
+            }
+        }
+        
+        org.springframework.data.domain.Page<PenaltyDto> dtoPage = penaltyPage.map(p -> {
+            boolean hasPendingClaim = pendingClaimPayableIds.containsKey(p.getId());
+            Long payableId = pendingClaimPayableIds.get(p.getId());
+            return toDto(p, hasPendingClaim, payableId);
+        });
         return com.calpex_technologies.chama.dto.PageResponse.from(dtoPage);
     }
 
@@ -86,17 +132,13 @@ public class PenaltyService {
     }
 
     public List<PenaltyDto> getMemberPenalties(Long tenantId, Long memberId) {
-        return penaltyRepository.findByTenantIdAndMemberId(tenantId, memberId)
-                .stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<Penalty> penalties = penaltyRepository.findByTenantIdAndMemberId(tenantId, memberId);
+        return toDtoListWithPendingClaims(penalties, tenantId);
     }
 
     public List<PenaltyDto> getUnpaidPenalties(Long tenantId) {
-        return penaltyRepository.findByTenantIdAndStatus(tenantId, Penalty.PenaltyStatus.UNPAID)
-                .stream()
-                .map(this::toDto)
-                .collect(Collectors.toList());
+        List<Penalty> penalties = penaltyRepository.findByTenantIdAndStatus(tenantId, Penalty.PenaltyStatus.UNPAID);
+        return toDtoListWithPendingClaims(penalties, tenantId);
     }
 
     public PenaltyDto getPenalty(Long tenantId, Long id) {
@@ -203,7 +245,7 @@ public class PenaltyService {
         if (fineType.getTriggerType() != null) {
             penaltyType = switch (fineType.getTriggerType()) {
                 case MEETING_ABSENT -> Penalty.PenaltyType.MEETING_ABSENT;
-                case LATE_PAYMENT -> Penalty.PenaltyType.LATE_PAYMENT;
+                case LATE_PAYMENT -> Penalty.PenaltyType.MEETING_LATE_ARRIVAL;
             };
         }
 
@@ -229,14 +271,14 @@ public class PenaltyService {
     }
 
     /**
-     * Impose late payment penalty
+     * Impose late payment penalty for contribution
      */
     @Transactional
     public PenaltyDto imposeLatePaymentPenalty(Long tenantId, Long memberId, Long contributionTypeId, 
                                                YearMonth periodMonth, BigDecimal amount) {
         // Check if penalty already exists
         if (penaltyRepository.existsByTenantIdAndMemberIdAndContributionTypeIdAndPeriodMonthAndPenaltyType(
-                tenantId, memberId, contributionTypeId, periodMonth, Penalty.PenaltyType.LATE_PAYMENT)) {
+                tenantId, memberId, contributionTypeId, periodMonth, Penalty.PenaltyType.CONTRIBUTION_LATE_PAYMENT)) {
             log.debug("Late payment penalty already exists for member {} contribution type {} period {}", 
                     memberId, contributionTypeId, periodMonth);
             return null;
@@ -255,7 +297,7 @@ public class PenaltyService {
         Penalty penalty = Penalty.builder()
                 .tenant(tenant)
                 .member(member)
-                .penaltyType(Penalty.PenaltyType.LATE_PAYMENT)
+                .penaltyType(Penalty.PenaltyType.CONTRIBUTION_LATE_PAYMENT)
                 .reason(reason)
                 .amount(amount)
                 .paidAmount(BigDecimal.ZERO)
@@ -360,6 +402,28 @@ public class PenaltyService {
     }
 
     private PenaltyDto toDto(Penalty penalty) {
+        // For single penalty lookup, do individual query
+        boolean hasPendingClaim = false;
+        Long payableId = null;
+        if (penalty.getStatus() != Penalty.PenaltyStatus.PAID && penalty.getStatus() != Penalty.PenaltyStatus.WAIVED) {
+            var payableOpt = payableRepository.findByPayableTypeAndPayableRefIdAndTenant_Id(
+                    PayableType.PENALTY, penalty.getId(), penalty.getTenant().getId());
+            if (payableOpt.isPresent()) {
+                Payable payable = payableOpt.get();
+                hasPendingClaim = payable.getStatus() == PayableStatus.AWAITING_CONFIRMATION;
+                if (hasPendingClaim) {
+                    payableId = payable.getId();
+                }
+            }
+        }
+        return toDto(penalty, hasPendingClaim, payableId);
+    }
+    
+    private PenaltyDto toDto(Penalty penalty, boolean hasPendingClaim) {
+        return toDto(penalty, hasPendingClaim, null);
+    }
+    
+    private PenaltyDto toDto(Penalty penalty, boolean hasPendingClaim, Long payableId) {
         PenaltyDto.PenaltyDtoBuilder builder = PenaltyDto.builder()
                 .id(penalty.getId())
                 .memberId(penalty.getMember().getId())
@@ -373,7 +437,9 @@ public class PenaltyService {
                         penalty.getPaidAmount() != null ? penalty.getPaidAmount() : BigDecimal.ZERO))
                 .status(penalty.getStatus().name())
                 .imposedAt(penalty.getImposedAt() != null ? penalty.getImposedAt().format(DATE_FORMATTER) : null)
-                .paidAt(penalty.getPaidAt() != null ? penalty.getPaidAt().format(DATE_FORMATTER) : null);
+                .paidAt(penalty.getPaidAt() != null ? penalty.getPaidAt().format(DATE_FORMATTER) : null)
+                .hasPendingClaim(hasPendingClaim)
+                .payableId(payableId);
 
         if (penalty.getMeeting() != null) {
             builder.meetingId(penalty.getMeeting().getId())
@@ -390,5 +456,35 @@ public class PenaltyService {
         }
 
         return builder.build();
+    }
+    
+    /**
+     * Convert list of penalties to DTOs with batch pending claim lookup.
+     */
+    private List<PenaltyDto> toDtoListWithPendingClaims(List<Penalty> penalties, Long tenantId) {
+        if (penalties.isEmpty()) return List.of();
+        
+        List<Long> unpaidIds = penalties.stream()
+                .filter(p -> p.getStatus() != Penalty.PenaltyStatus.PAID && p.getStatus() != Penalty.PenaltyStatus.WAIVED)
+                .map(Penalty::getId)
+                .collect(Collectors.toList());
+        
+        // Batch fetch payables with pending claims (maps refId -> payableId)
+        Map<Long, Long> pendingClaimPayableIds = new java.util.HashMap<>();
+        if (!unpaidIds.isEmpty()) {
+            List<Payable> pendingPayables = payableRepository.findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                    tenantId, PayableType.PENALTY, unpaidIds, PayableStatus.AWAITING_CONFIRMATION);
+            for (Payable p : pendingPayables) {
+                pendingClaimPayableIds.put(p.getPayableRefId(), p.getId());
+            }
+        }
+        
+        return penalties.stream()
+                .map(p -> {
+                    boolean hasPending = pendingClaimPayableIds.containsKey(p.getId());
+                    Long pId = hasPending ? pendingClaimPayableIds.get(p.getId()) : null;
+                    return toDto(p, hasPending, pId);
+                })
+                .collect(Collectors.toList());
     }
 }

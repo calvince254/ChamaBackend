@@ -16,4 +16,6 @@ public class PayoutPreviewRequest {
     private Payout.PayoutType payoutType;
     private BigDecimal amount;
     private Long memberId; // For individual withdrawals only
+    private Boolean useOwnershipDistribution; // If true, distribute based on ownership percentage
+    private BigDecimal distributionPercentage; // Percentage of each member's value to distribute (1-100)
 }

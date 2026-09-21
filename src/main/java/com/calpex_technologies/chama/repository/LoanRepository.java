@@ -38,6 +38,10 @@ public interface LoanRepository extends JpaRepository<Loan, Long> {
     @Query("SELECT l FROM Loan l WHERE l.tenant.id = :tenantId AND l.status IN ('ACTIVE', 'OVERDUE')")
     List<Loan> findActiveAndOverdueByTenantId(@Param("tenantId") Long tenantId);
     
+    // Find active/overdue loans with guarantors eagerly fetched
+    @Query("SELECT DISTINCT l FROM Loan l LEFT JOIN FETCH l.guarantors LEFT JOIN FETCH l.member WHERE l.tenant.id = :tenantId AND l.status IN ('ACTIVE', 'OVERDUE', 'DEFAULTED')")
+    List<Loan> findActiveLoansWithGuarantors(@Param("tenantId") Long tenantId);
+    
     @Query("SELECT l FROM Loan l WHERE l.tenant.id = :tenantId AND l.status IN ('OVERDUE', 'DEFAULTED')")
     List<Loan> findOverdueByTenantId(@Param("tenantId") Long tenantId);
     
