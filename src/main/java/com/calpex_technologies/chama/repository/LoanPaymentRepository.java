@@ -45,4 +45,14 @@ public interface LoanPaymentRepository extends JpaRepository<LoanPayment, Long> 
     // Count pending payments for tenant (for badge/notification)
     @Query("SELECT COUNT(p) FROM LoanPayment p WHERE p.tenant.id = :tenantId AND p.status = 'PENDING'")
     long countPendingByTenantId(@Param("tenantId") Long tenantId);
+    
+    // ==================== PAYMENT HISTORY QUERIES FOR CREDIT SCORING ====================
+    
+    // Count all verified payments for a member
+    @Query("SELECT COUNT(p) FROM LoanPayment p WHERE p.member.id = :memberId AND p.status = 'VERIFIED'")
+    int countVerifiedPaymentsByMemberId(@Param("memberId") Long memberId);
+    
+    // Sum total amount paid by member across all loans
+    @Query("SELECT COALESCE(SUM(p.amount), 0) FROM LoanPayment p WHERE p.member.id = :memberId AND p.status = 'VERIFIED'")
+    BigDecimal sumVerifiedPaymentsByMemberId(@Param("memberId") Long memberId);
 }

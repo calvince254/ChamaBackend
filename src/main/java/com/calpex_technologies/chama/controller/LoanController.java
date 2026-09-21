@@ -90,6 +90,16 @@ public class LoanController {
     // ==================== LOAN ELIGIBILITY CHECK ====================
 
     /**
+     * Get current member's credit score without requiring loan amount.
+     * This is useful for displaying credit score info on the loans page.
+     */
+    @GetMapping("/my-credit-score")
+    public ResponseEntity<LoanEligibilityDto.CreditScoreResponse> getMyCreditScore(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(loanService.getMemberCreditScore(principal.getTenantId(), principal.getMemberId()));
+    }
+
+    /**
      * Check loan eligibility based on contributions.
      * Rule: Applicant's contributions + guarantors' contributions must be >= loan amount
      */

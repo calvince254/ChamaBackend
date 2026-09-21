@@ -21,9 +21,10 @@ public class HttpConfigurer {
         http.authorizeHttpRequests(auth -> auth
             // ==================== PUBLIC ENDPOINTS ====================
             .requestMatchers("/api/auth/login", "/api/auth/login/**", "/api/auth/super-admin/login").permitAll()
-            // Change password and logout require authentication
+            // Change password, logout, and session verification require authentication
             .requestMatchers("/api/auth/change-password").authenticated()
             .requestMatchers("/api/auth/logout").authenticated()
+            .requestMatchers("/api/auth/me").authenticated()  // Session validation endpoint
             .requestMatchers("/api/permissions").hasAnyAuthority("FULL_ACCESS", "VIEW_ROLES", "MANAGE_ROLE_PERMISSIONS")  // Get available permissions for roles UI
             .requestMatchers("/h2-console/**").permitAll()
             
@@ -54,6 +55,7 @@ public class HttpConfigurer {
             // ==================== LOANS ====================
             // Specific paths MUST come before path variable patterns
             .requestMatchers("GET", "/api/loans/my-loans").authenticated()  // Any authenticated user can see their own loans
+            .requestMatchers("GET", "/api/loans/my-credit-score").authenticated()  // Any authenticated user can see their credit score
             .requestMatchers("GET", "/api/loans/pending-approvals").hasAnyAuthority("FULL_ACCESS", "VIEW_PENDING_LOAN_APPROVALS")
             .requestMatchers("POST", "/api/loans/check-eligibility").authenticated()  // Any member can check loan eligibility
             .requestMatchers("POST", "/api/loans/apply").hasAnyAuthority("FULL_ACCESS", "APPLY_FOR_LOAN")

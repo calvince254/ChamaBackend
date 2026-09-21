@@ -246,6 +246,7 @@ public class LoanService {
      * Returns a DTO with contribution details and eligibility status.
      */
     public LoanEligibilityDto checkLoanEligibility(Long tenantId, Long memberId, List<Long> guarantorIds, BigDecimal loanAmount) {
+        // ==================== CONTRIBUTION-BASED ELIGIBILITY ====================
         BigDecimal applicantContributions = contributionRepository.sumPaidAmountByMemberId(memberId);
         if (applicantContributions == null) applicantContributions = BigDecimal.ZERO;
         
@@ -262,8 +263,52 @@ public class LoanService {
         }
         
         BigDecimal totalContributions = applicantContributions.add(guarantorContributions);
-        boolean eligible = totalContributions.compareTo(loanAmount) >= 0;
-        BigDecimal shortfall = eligible ? BigDecimal.ZERO : loanAmount.subtract(totalContributions);
+        boolean contributionEligible = totalContributions.compareTo(loanAmount) >= 0;
+        BigDecimal shortfall = contributionEligible ? BigDecimal.ZERO : loanAmount.subtract(totalContributions);
+        
+        // ==================== LOAN HISTORY ANALYSIS ====================
+        LoanEligibilityDto.LoanHistorySummary loanHistory = buildLoanHistorySummary(memberId);
+        
+        // ==================== CREDIT SCORE CALCULATION ====================
+        LoanEligibilityDto.CreditScore creditScore = calculateCreditScore(loanHistory);
+        
+        // ==================== ELIGIBILITY NOTES ====================
+        List<String> eligibilityNotes = new java.util.ArrayList<>();
+        
+        // Check for active loans
+        if (loanHistory.isHasActiveLoans()) {
+            eligibilityNotes.add("Member has " + loanHistory.getActiveLoansCount() + " active loan(s) with outstanding balance of KES " + 
+                String.format("%,.2f", loanHistory.getCurrentOutstanding()));
+        }
+        
+        // Check for defaulted loans
+        if (loanHistory.getDefaultedLoansCount() > 0) {
+            eligibilityNotes.add("⚠️ Member has " + loanHistory.getDefaultedLoansCount() + " defaulted loan(s) in history");
+        }
+        
+        // Check repayment rate
+        if (loanHistory.getTotalLoansCount() > 0 && loanHistory.getRepaymentRate() < 70) {
+            eligibilityNotes.add("⚠️ Repayment rate is below 70% - higher risk borrower");
+        }
+        
+        // New borrower note
+        if (loanHistory.getTotalLoansCount() == 0) {
+            eligibilityNotes.add("ℹ️ First-time borrower - no loan history to assess");
+        } else if (loanHistory.getCompletedLoansCount() > 0) {
+            eligibilityNotes.add("✓ Member has successfully completed " + loanHistory.getCompletedLoansCount() + " loan(s)");
+        }
+        
+        // Final eligibility considers both contributions AND credit history
+        boolean eligible = contributionEligible && loanHistory.getDefaultedLoansCount() == 0;
+        
+        if (!contributionEligible) {
+            eligibilityNotes.add(0, "❌ Insufficient contributions to secure this loan amount");
+        }
+        
+        if (loanHistory.getDefaultedLoansCount() > 0) {
+            eligible = false;
+            eligibilityNotes.add(0, "❌ Cannot apply due to previous loan default(s)");
+        }
         
         return LoanEligibilityDto.builder()
                 .applicantContributions(applicantContributions)
@@ -272,6 +317,174 @@ public class LoanService {
                 .loanAmount(loanAmount)
                 .eligible(eligible)
                 .shortfall(shortfall)
+                .loanHistory(loanHistory)
+                .creditScore(creditScore)
+                .eligibilityNotes(eligibilityNotes)
+                .build();
+    }
+    
+    /**
+     * Build loan history summary for a member
+     */
+    private LoanEligibilityDto.LoanHistorySummary buildLoanHistorySummary(Long memberId) {
+        int totalLoans = loanRepository.countAllLoansByMemberId(memberId);
+        int completedLoans = loanRepository.countCompletedLoansByMemberId(memberId);
+        int activeLoans = loanRepository.countActiveLoansByMemberId(memberId);
+        int defaultedLoans = loanRepository.countDefaultedLoansByMemberId(memberId);
+        
+        BigDecimal totalBorrowed = loanRepository.sumTotalBorrowedByMemberId(memberId);
+        BigDecimal totalRepaid = loanRepository.sumTotalRepaidByMemberId(memberId);
+        BigDecimal currentOutstanding = loanRepository.sumOutstandingByMemberId(memberId);
+        boolean hasActiveLoans = loanRepository.hasActiveLoansByMemberId(memberId);
+        
+        int verifiedPayments = loanPaymentRepository.countVerifiedPaymentsByMemberId(memberId);
+        
+        // Calculate repayment rate based on completed loans vs defaulted loans
+        double repaymentRate = 100.0;
+        if (totalLoans > 0) {
+            int settledLoans = completedLoans + defaultedLoans;
+            if (settledLoans > 0) {
+                repaymentRate = (completedLoans * 100.0) / settledLoans;
+            }
+        }
+        
+        return LoanEligibilityDto.LoanHistorySummary.builder()
+                .totalLoansCount(totalLoans)
+                .completedLoansCount(completedLoans)
+                .activeLoansCount(activeLoans)
+                .defaultedLoansCount(defaultedLoans)
+                .totalBorrowed(totalBorrowed != null ? totalBorrowed : BigDecimal.ZERO)
+                .totalRepaid(totalRepaid != null ? totalRepaid : BigDecimal.ZERO)
+                .currentOutstanding(currentOutstanding != null ? currentOutstanding : BigDecimal.ZERO)
+                .hasActiveLoans(hasActiveLoans)
+                .onTimePaymentsCount(verifiedPayments) // Simplified - all verified payments
+                .latePaymentsCount(0) // Would need additional tracking
+                .missedPaymentsCount(0) // Would need schedule comparison
+                .repaymentRate(repaymentRate)
+                .build();
+    }
+    
+    /**
+     * Calculate credit score based on loan history
+     * Score ranges from 0-100
+     */
+    private LoanEligibilityDto.CreditScore calculateCreditScore(LoanEligibilityDto.LoanHistorySummary history) {
+        List<String> factors = new java.util.ArrayList<>();
+        int score = 50; // Base score for new borrowers
+        
+        if (history.getTotalLoansCount() == 0) {
+            // No loan history
+            return LoanEligibilityDto.CreditScore.builder()
+                    .score(50)
+                    .rating("NO_HISTORY")
+                    .ratingColor("gray")
+                    .description("No loan history available")
+                    .factors(List.of("First-time borrower", "Build credit by repaying loans on time"))
+                    .build();
+        }
+        
+        // Factor 1: Completed loans (+10 points each, max +30)
+        int completedBonus = Math.min(history.getCompletedLoansCount() * 10, 30);
+        score += completedBonus;
+        if (history.getCompletedLoansCount() > 0) {
+            factors.add("+" + completedBonus + " points for " + history.getCompletedLoansCount() + " completed loan(s)");
+        }
+        
+        // Factor 2: Defaulted loans (-25 points each)
+        int defaultedPenalty = history.getDefaultedLoansCount() * 25;
+        score -= defaultedPenalty;
+        if (history.getDefaultedLoansCount() > 0) {
+            factors.add("-" + defaultedPenalty + " points for " + history.getDefaultedLoansCount() + " defaulted loan(s)");
+        }
+        
+        // Factor 3: Repayment rate bonus
+        if (history.getRepaymentRate() >= 90) {
+            score += 15;
+            factors.add("+15 points for excellent repayment rate (" + String.format("%.0f", history.getRepaymentRate()) + "%)");
+        } else if (history.getRepaymentRate() >= 70) {
+            score += 5;
+            factors.add("+5 points for good repayment rate (" + String.format("%.0f", history.getRepaymentRate()) + "%)");
+        } else if (history.getRepaymentRate() < 50) {
+            score -= 10;
+            factors.add("-10 points for poor repayment rate (" + String.format("%.0f", history.getRepaymentRate()) + "%)");
+        }
+        
+        // Factor 4: Current debt burden
+        if (history.isHasActiveLoans()) {
+            // Having active loans slightly reduces score
+            score -= 5;
+            factors.add("-5 points for having active loans");
+        }
+        
+        // Factor 5: Borrowing history length bonus
+        if (history.getTotalLoansCount() >= 3) {
+            score += 5;
+            factors.add("+5 points for established borrowing history");
+        }
+        
+        // Clamp score between 0 and 100
+        score = Math.max(0, Math.min(100, score));
+        
+        // Determine rating
+        String rating;
+        String ratingColor;
+        String description;
+        
+        if (score >= 80) {
+            rating = "EXCELLENT";
+            ratingColor = "green";
+            description = "Excellent credit standing - highly reliable borrower";
+        } else if (score >= 65) {
+            rating = "GOOD";
+            ratingColor = "blue";
+            description = "Good credit standing - reliable borrower";
+        } else if (score >= 50) {
+            rating = "FAIR";
+            ratingColor = "yellow";
+            description = "Fair credit standing - moderate risk";
+        } else if (score >= 30) {
+            rating = "POOR";
+            ratingColor = "orange";
+            description = "Poor credit standing - higher risk borrower";
+        } else {
+            rating = "VERY_POOR";
+            ratingColor = "red";
+            description = "Very poor credit standing - loan approval unlikely";
+        }
+        
+        return LoanEligibilityDto.CreditScore.builder()
+                .score(score)
+                .rating(rating)
+                .ratingColor(ratingColor)
+                .description(description)
+                .factors(factors)
+                .build();
+    }
+
+    /**
+     * Get credit score for a member without requiring loan amount.
+     * Useful for displaying credit info on the loans page.
+     */
+    public LoanEligibilityDto.CreditScoreResponse getMemberCreditScore(Long tenantId, Long memberId) {
+        // Get member info
+        Member member = memberRepository.findByIdAndTenantId(memberId, tenantId)
+                .orElseThrow(() -> new RuntimeException("Member not found"));
+        
+        // Get member's contributions
+        BigDecimal totalContributions = contributionRepository.sumPaidAmountByMemberId(memberId);
+        if (totalContributions == null) totalContributions = BigDecimal.ZERO;
+        
+        // Build loan history
+        LoanEligibilityDto.LoanHistorySummary loanHistory = buildLoanHistorySummary(memberId);
+        
+        // Calculate credit score
+        LoanEligibilityDto.CreditScore creditScore = calculateCreditScore(loanHistory);
+        
+        return LoanEligibilityDto.CreditScoreResponse.builder()
+                .creditScore(creditScore)
+                .loanHistory(loanHistory)
+                .memberName(member.getName())
+                .totalContributions(totalContributions)
                 .build();
     }
 

@@ -335,4 +335,40 @@ public class AuthService {
         }
         return permissions;
     }
+
+    /**
+     * Get current user info for session validation.
+     * Called by /auth/me endpoint to verify token and return user details.
+     * Validates that memberId and email both match to prevent cross-database confusion.
+     * Throws exception if member not found or mismatch (triggers 401 on frontend).
+     */
+    @Transactional(readOnly = true)
+    public AuthResponse getCurrentUserInfo(Long memberId, String tokenEmail) {
+        Member member = memberRepository.findById(memberId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        // Verify email matches - prevents using token from different database
+        // where the same memberId might exist but for a different person
+        if (tokenEmail != null && !tokenEmail.equals(member.getEmail())) {
+            throw new RuntimeException("Session invalid - user mismatch");
+        }
+
+        if (member.getStatus() != Member.MemberStatus.ACTIVE) {
+            throw new RuntimeException("Account is not active");
+        }
+
+        // Super admin case
+        if (member.isSuperAdmin()) {
+            return buildSuperAdminResponse(member);
+        }
+
+        // Regular user - must have tenant
+        Tenant tenant = member.getTenant();
+        if (tenant == null) {
+            throw new RuntimeException("No tenant associated with this account");
+        }
+
+        // Return full auth response (but no new token - just validate existing)
+        return buildAuthResponse(member, tenant);
+    }
 }

@@ -95,4 +95,34 @@ public interface LoanRepository extends JpaRepository<Loan, Long> {
     
     @Query("SELECT l FROM Loan l WHERE l.tenant.id = :tenantId AND l.status IN ('PENDING', 'PENDING_APPROVAL', 'PENDING_GUARANTORS') ORDER BY l.createdAt DESC")
     Page<Loan> findAwaitingApprovalByTenantId(@Param("tenantId") Long tenantId, Pageable pageable);
+    
+    // ==================== LOAN HISTORY QUERIES FOR ELIGIBILITY ====================
+    
+    // Count all loans for a member
+    @Query("SELECT COUNT(l) FROM Loan l WHERE l.member.id = :memberId")
+    int countAllLoansByMemberId(@Param("memberId") Long memberId);
+    
+    // Count completed (fully repaid) loans
+    @Query("SELECT COUNT(l) FROM Loan l WHERE l.member.id = :memberId AND l.status = 'CLEARED'")
+    int countCompletedLoansByMemberId(@Param("memberId") Long memberId);
+    
+    // Count active loans
+    @Query("SELECT COUNT(l) FROM Loan l WHERE l.member.id = :memberId AND l.status IN ('ACTIVE', 'OVERDUE')")
+    int countActiveLoansByMemberId(@Param("memberId") Long memberId);
+    
+    // Count defaulted loans
+    @Query("SELECT COUNT(l) FROM Loan l WHERE l.member.id = :memberId AND l.status = 'DEFAULTED'")
+    int countDefaultedLoansByMemberId(@Param("memberId") Long memberId);
+    
+    // Sum total borrowed (principal of all disbursed loans)
+    @Query("SELECT COALESCE(SUM(l.principal), 0) FROM Loan l WHERE l.member.id = :memberId AND l.status IN ('ACTIVE', 'OVERDUE', 'COMPLETED', 'DEFAULTED')")
+    BigDecimal sumTotalBorrowedByMemberId(@Param("memberId") Long memberId);
+    
+    // Sum total repaid
+    @Query("SELECT COALESCE(SUM(l.totalPaid), 0) FROM Loan l WHERE l.member.id = :memberId AND l.status IN ('ACTIVE', 'OVERDUE', 'COMPLETED', 'DEFAULTED')")
+    BigDecimal sumTotalRepaidByMemberId(@Param("memberId") Long memberId);
+    
+    // Check if member has any active/overdue loans
+    @Query("SELECT CASE WHEN COUNT(l) > 0 THEN true ELSE false END FROM Loan l WHERE l.member.id = :memberId AND l.status IN ('ACTIVE', 'OVERDUE')")
+    boolean hasActiveLoansByMemberId(@Param("memberId") Long memberId);
 }

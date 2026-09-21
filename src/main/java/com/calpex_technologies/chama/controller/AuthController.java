@@ -45,6 +45,20 @@ public class AuthController {
     }
 
     /**
+     * Verify current session and return user info.
+     * Used by frontend to validate token on app init, tab focus, and navigation.
+     * Returns 401 if token is invalid/expired/blacklisted or user mismatch.
+     */
+    @GetMapping("/me")
+    public ResponseEntity<AuthResponse> getCurrentUser(@AuthenticationPrincipal UserPrincipal principal) {
+        if (principal == null) {
+            return ResponseEntity.status(401).build();
+        }
+        // Pass both memberId and email to verify the user matches (prevents cross-database issues)
+        return ResponseEntity.ok(authService.getCurrentUserInfo(principal.getMemberId(), principal.getEmail()));
+    }
+
+    /**
      * Logout endpoint - invalidates the current JWT token
      */
     @PostMapping("/logout")
