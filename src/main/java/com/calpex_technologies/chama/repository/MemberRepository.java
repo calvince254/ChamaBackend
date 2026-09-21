@@ -22,6 +22,13 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     List<Member> findAllByEmail(String email);
     Optional<Member> findByEmailAndTenantId(String email, Long tenantId);
     Optional<Member> findByPhoneAndTenant(String phone, Tenant tenant);
+    Optional<Member> findByPhoneAndTenantId(String phone, Long tenantId);
+    List<Member> findAllByPhone(String phone);
+    
+    // Find by phone with multiple format variations (for login)
+    @Query("SELECT m FROM Member m WHERE m.phone IN :phoneVariants")
+    List<Member> findAllByPhoneIn(@Param("phoneVariants") List<String> phoneVariants);
+    
     Optional<Member> findByIdAndTenantId(Long id, Long tenantId);
     boolean existsByEmailAndTenant(String email, Tenant tenant);
     long countByTenantId(Long tenantId);

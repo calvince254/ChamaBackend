@@ -8,6 +8,7 @@ import com.calpex_technologies.chama.repository.MemberRepository;
 import com.calpex_technologies.chama.repository.PasswordHistoryRepository;
 import com.calpex_technologies.chama.repository.TenantRepository;
 import com.calpex_technologies.chama.security.JwtUtil;
+import com.calpex_technologies.chama.util.PhoneUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -31,29 +32,35 @@ public class AuthService {
 
     @Transactional
     public AuthResponse login(LoginRequest request) {
-        // Find all members by email (across all tenants)
-        List<Member> members = memberRepository.findAllByEmail(request.getEmail());
+        String identifier = request.getEmail().trim();
+        List<Member> members;
+        boolean isPhoneLogin = PhoneUtils.isPhoneNumber(identifier);
+        
+        // Determine if login is by email or phone
+        if (isPhoneLogin) {
+            // Login by phone - search all possible phone format variations
+            List<String> phoneVariants = PhoneUtils.getPhoneVariants(identifier);
+            members = memberRepository.findAllByPhoneIn(phoneVariants);
+        } else {
+            // Login by email
+            members = memberRepository.findAllByEmail(identifier);
+        }
         
         if (members.isEmpty()) {
             throw new RuntimeException("Invalid credentials");
         }
         
-        // Find a member with matching password
-        Member validMember = null;
-        for (Member m : members) {
-            if (passwordEncoder.matches(request.getPassword(), m.getPassword())) {
-                validMember = m;
-                break;
-            }
-        }
+        // Find member(s) with matching password
+        List<Member> matchingMembers = members.stream()
+                .filter(m -> passwordEncoder.matches(request.getPassword(), m.getPassword()))
+                .filter(m -> m.getStatus() == Member.MemberStatus.ACTIVE)
+                .collect(Collectors.toList());
         
-        if (validMember == null) {
+        if (matchingMembers.isEmpty()) {
             throw new RuntimeException("Invalid credentials");
         }
 
-        if (validMember.getStatus() != Member.MemberStatus.ACTIVE) {
-            throw new RuntimeException("Account is not active");
-        }
+        Member validMember = matchingMembers.get(0);
 
         // Handle first login - force password change
         if (Boolean.TRUE.equals(validMember.getFirstLogin())) {
@@ -67,16 +74,21 @@ public class AuthService {
             return buildSuperAdminResponse(validMember);
         }
 
-        // Get all tenants this user belongs to
-        List<Member> activeMemberships = members.stream()
-                .filter(m -> m.getStatus() == Member.MemberStatus.ACTIVE)
+        // Multi-tenant check: Only show selection if the SAME PERSON (same email + same phone + same password)
+        // exists in multiple chamas. Different people with different emails are separate accounts.
+        String validEmail = validMember.getEmail();
+        String validPhone = validMember.getPhone();
+        
+        // Filter to only members with same email AND same phone (i.e., same person in multiple chamas)
+        List<Member> samePersonMemberships = matchingMembers.stream()
                 .filter(m -> m.getTenant() != null)
-                .filter(m -> passwordEncoder.matches(request.getPassword(), m.getPassword()))
+                .filter(m -> validEmail != null && validEmail.equals(m.getEmail()))
+                .filter(m -> validPhone != null && validPhone.equals(m.getPhone()))
                 .collect(Collectors.toList());
         
-        // If user is in multiple chamas, return selection list
-        if (activeMemberships.size() > 1) {
-            return buildMultiTenantResponse(validMember, activeMemberships);
+        // If same person is in multiple chamas, return selection list
+        if (samePersonMemberships.size() > 1) {
+            return buildMultiTenantResponse(validMember, samePersonMemberships);
         }
 
         // Single tenant - regular login
@@ -93,8 +105,24 @@ public class AuthService {
      */
     @Transactional(readOnly = true)
     public AuthResponse loginToTenant(LoginRequest request, Long tenantId) {
-        Member member = memberRepository.findByEmailAndTenantId(request.getEmail(), tenantId)
-                .orElseThrow(() -> new RuntimeException("Invalid credentials"));
+        String identifier = request.getEmail().trim();
+        Member member;
+        
+        // Determine if login is by email or phone
+        if (PhoneUtils.isPhoneNumber(identifier)) {
+            // Login by phone - try all format variations
+            List<String> phoneVariants = PhoneUtils.getPhoneVariants(identifier);
+            member = phoneVariants.stream()
+                    .map(phone -> memberRepository.findByPhoneAndTenantId(phone, tenantId))
+                    .filter(java.util.Optional::isPresent)
+                    .map(java.util.Optional::get)
+                    .findFirst()
+                    .orElseThrow(() -> new RuntimeException("Invalid credentials"));
+        } else {
+            // Login by email
+            member = memberRepository.findByEmailAndTenantId(identifier, tenantId)
+                    .orElseThrow(() -> new RuntimeException("Invalid credentials"));
+        }
 
         if (!passwordEncoder.matches(request.getPassword(), member.getPassword())) {
             throw new RuntimeException("Invalid credentials");
