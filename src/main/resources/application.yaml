@@ -10,7 +10,7 @@ spring:
 
   # MySQL Database Configuration
   datasource:
-    url: jdbc:mysql://localhost:3306/chama_db?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3306/chamadb?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:root}
@@ -83,7 +83,7 @@ spring:
       on-profile: prod
 
   datasource:
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:chama_db}?useSSL=true&serverTimezone=UTC
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:chamadb}?useSSL=true&serverTimezone=UTC
     username: ${DB_USERNAME:chama}
     password: ${DB_PASSWORD:chama123}
 

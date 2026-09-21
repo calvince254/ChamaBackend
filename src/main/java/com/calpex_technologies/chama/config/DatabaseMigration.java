@@ -33,6 +33,7 @@ public class DatabaseMigration implements ApplicationRunner {
         fixLoanApprovalLevelColumn();
         addFirstLoginColumn();
         createPasswordHistoryTable();
+        fixAuditLogMemberForeignKey();
     }
 
     /**
@@ -392,6 +393,57 @@ public class DatabaseMigration implements ApplicationRunner {
             log.info("Successfully created password_history table");
         } catch (Exception e) {
             log.warn("Could not create password_history table: {}. This may be expected on first run.", e.getMessage());
+        }
+    }
+
+    /**
+     * Fix audit_logs.member_id foreign key to SET NULL on delete.
+     * This allows deleting members while preserving audit history.
+     * The member_name and member_email columns are preserved in audit_logs.
+     */
+    private void fixAuditLogMemberForeignKey() {
+        try {
+            // Check if the audit_logs table exists
+            String checkTable = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'audit_logs'";
+            Integer tableExists = jdbcTemplate.queryForObject(checkTable, Integer.class);
+            
+            if (tableExists == null || tableExists == 0) {
+                log.info("Audit_logs table doesn't exist yet, skipping migration");
+                return;
+            }
+
+            // Check if the foreign key exists
+            String checkFk = "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE table_schema = DATABASE() AND table_name = 'audit_logs' AND constraint_type = 'FOREIGN KEY' AND CONSTRAINT_NAME LIKE '%member%'";
+            String constraintName = null;
+            try {
+                constraintName = jdbcTemplate.queryForObject(checkFk, String.class);
+            } catch (Exception e) {
+                // No constraint found
+            }
+
+            if (constraintName != null) {
+                // Check if it already has ON DELETE SET NULL
+                String checkDeleteRule = "SELECT DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'audit_logs' AND CONSTRAINT_NAME = ?";
+                String deleteRule = jdbcTemplate.queryForObject(checkDeleteRule, String.class, constraintName);
+                
+                if (!"SET NULL".equalsIgnoreCase(deleteRule)) {
+                    log.info("Fixing audit_logs.member_id foreign key to SET NULL on delete...");
+                    
+                    // Drop the existing foreign key
+                    jdbcTemplate.execute("ALTER TABLE audit_logs DROP FOREIGN KEY " + constraintName);
+                    
+                    // Add new foreign key with ON DELETE SET NULL
+                    jdbcTemplate.execute("ALTER TABLE audit_logs ADD CONSTRAINT fk_audit_logs_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE SET NULL");
+                    
+                    log.info("Successfully fixed audit_logs.member_id foreign key");
+                } else {
+                    log.debug("audit_logs.member_id foreign key already has ON DELETE SET NULL, no migration needed");
+                }
+            } else {
+                log.debug("No member_id foreign key found on audit_logs, no migration needed");
+            }
+        } catch (Exception e) {
+            log.warn("Could not fix audit_logs.member_id foreign key: {}. This may be expected on first run.", e.getMessage());
         }
     }
 }

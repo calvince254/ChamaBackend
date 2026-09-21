@@ -30,13 +30,17 @@ public class HttpConfigurer {
             
             // ==================== MEMBERS ====================
             .requestMatchers("GET", "/api/members", "/api/members/active").hasAnyAuthority("FULL_ACCESS", "VIEW_MEMBERS")
+            .requestMatchers("GET", "/api/members/paginated").hasAnyAuthority("FULL_ACCESS", "VIEW_MEMBERS")
             .requestMatchers("GET", "/api/members/{id}").hasAnyAuthority("FULL_ACCESS", "VIEW_MEMBER_DETAILS")
+            .requestMatchers("GET", "/api/members/{id}/financial-summary").hasAnyAuthority("FULL_ACCESS", "VIEW_MEMBER_DETAILS")
+            .requestMatchers("GET", "/api/members/{id}/transactions/**").hasAnyAuthority("FULL_ACCESS", "VIEW_MEMBER_DETAILS")
             .requestMatchers("POST", "/api/members").hasAnyAuthority("FULL_ACCESS", "CREATE_MEMBER")
             .requestMatchers("PUT", "/api/members/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_MEMBER")
             .requestMatchers("DELETE", "/api/members/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_MEMBER")
             .requestMatchers("DELETE", "/api/members/{id}/hard").hasAnyAuthority("FULL_ACCESS", "HARD_DELETE_MEMBER")
             .requestMatchers("PATCH", "/api/members/{id}/deactivate").hasAnyAuthority("FULL_ACCESS", "DEACTIVATE_MEMBER")
             .requestMatchers("PATCH", "/api/members/{id}/activate").hasAnyAuthority("FULL_ACCESS", "ACTIVATE_MEMBER")
+            .requestMatchers("POST", "/api/members/reset-password").hasAnyAuthority("FULL_ACCESS", "RESET_PASSWORD")
             
             // ==================== CONTRIBUTIONS ====================
             .requestMatchers("GET", "/api/contributions/**").hasAnyAuthority("FULL_ACCESS", "VIEW_CONTRIBUTIONS")
