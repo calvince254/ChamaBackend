@@ -55,23 +55,32 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     @Modifying
     void deleteByTenant(Tenant tenant);
     
-    // Paginated queries
-    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId")
+    // Paginated queries with count queries to avoid in-memory pagination issues
+    @Query(value = "SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId",
+           countQuery = "SELECT COUNT(m) FROM Member m WHERE m.tenant.id = :tenantId")
     Page<Member> findByTenantIdWithRole(@Param("tenantId") Long tenantId, Pageable pageable);
     
-    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND " +
+    @Query(value = "SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND " +
+           "(LOWER(m.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
+           "LOWER(m.memberNo) LIKE LOWER(CONCAT('%', :search, '%')))",
+           countQuery = "SELECT COUNT(m) FROM Member m WHERE m.tenant.id = :tenantId AND " +
            "(LOWER(m.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
            "LOWER(m.memberNo) LIKE LOWER(CONCAT('%', :search, '%')))")
     Page<Member> findByTenantIdWithRoleAndSearch(@Param("tenantId") Long tenantId, 
                                                   @Param("search") String search, 
                                                   Pageable pageable);
     
-    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND m.status = :status")
+    @Query(value = "SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND m.status = :status",
+           countQuery = "SELECT COUNT(m) FROM Member m WHERE m.tenant.id = :tenantId AND m.status = :status")
     Page<Member> findByTenantIdWithRoleAndStatus(@Param("tenantId") Long tenantId, 
                                                   @Param("status") Member.MemberStatus status, 
                                                   Pageable pageable);
     
-    @Query("SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND " +
+    @Query(value = "SELECT m FROM Member m LEFT JOIN FETCH m.role WHERE m.tenant.id = :tenantId AND " +
+           "m.status = :status AND " +
+           "(LOWER(m.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
+           "LOWER(m.memberNo) LIKE LOWER(CONCAT('%', :search, '%')))",
+           countQuery = "SELECT COUNT(m) FROM Member m WHERE m.tenant.id = :tenantId AND " +
            "m.status = :status AND " +
            "(LOWER(m.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
            "LOWER(m.memberNo) LIKE LOWER(CONCAT('%', :search, '%')))")

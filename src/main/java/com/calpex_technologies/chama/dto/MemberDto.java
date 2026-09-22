@@ -1,5 +1,6 @@
 package com.calpex_technologies.chama.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -25,4 +26,9 @@ public class MemberDto {
     private BigDecimal totalShares;
     private BigDecimal outstandingLoan;
     private int arrearsMonths;
+    
+    @JsonProperty("roleId")
+    public Long getRoleId() {
+        return roleId;
+    }
 }

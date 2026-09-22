@@ -51,4 +51,18 @@ public class InvestmentDto {
     private String soldBy;
     private String soldNotes;
     private BigDecimal finalGain;
+
+    // Partial Sale Tracking
+    private BigDecimal totalUnits;
+    private BigDecimal remainingUnits;
+    private BigDecimal totalAmountSold;
+    private BigDecimal totalPrincipalSold;
+    private BigDecimal realizedGain;
+    private BigDecimal unrealizedGain;
+    private BigDecimal remainingPrincipal;
+    private BigDecimal pricePerUnit;
+    private BigDecimal currentValuePerUnit;
+    private BigDecimal soldPercentage;
+    private Boolean hasPartialSales;
+    private Boolean isFullySold;
 }

@@ -97,7 +97,32 @@ public class MemberService {
             memberPage = memberRepository.findByTenantIdWithRole(tenantId, pageable);
         }
         
-        Page<MemberDto> dtoPage = memberPage.map(this::toDto);
+        // Convert to DTOs, explicitly fetching role name within transaction
+        Page<MemberDto> dtoPage = memberPage.map(member -> {
+            String roleName = "Member";
+            Long roleId = null;
+            if (member.getRole() != null) {
+                // Force load within transaction
+                Role role = member.getRole();
+                roleName = role.getName();
+                roleId = role.getId();
+            }
+            return MemberDto.builder()
+                    .id(member.getId())
+                    .name(member.getName())
+                    .phone(member.getPhone())
+                    .email(member.getEmail())
+                    .memberNo(member.getMemberNo())
+                    .joinDate(member.getJoinDate() != null ? member.getJoinDate().toString() : null)
+                    .status(member.getStatus().name())
+                    .role(roleName)
+                    .roleId(roleId)
+                    .totalSavings(member.getTotalSavings())
+                    .totalShares(member.getTotalShares())
+                    .outstandingLoan(member.getOutstandingLoan())
+                    .arrearsMonths(member.getArrearsMonths())
+                    .build();
+        });
         
         // Fetch share percentages from ShareCalculationService and enrich member DTOs
         ShareCalculationDto shareCalc = shareCalculationService.calculateShares(tenantId);
@@ -604,6 +629,7 @@ public class MemberService {
                 .joinDate(member.getJoinDate() != null ? member.getJoinDate().toString() : null)
                 .status(member.getStatus().name())
                 .role(member.getRole() != null ? member.getRole().getName() : "Member")
+                .roleId(member.getRole() != null ? member.getRole().getId() : null)
                 .totalSavings(member.getTotalSavings())
                 .totalShares(member.getTotalShares())
                 .outstandingLoan(member.getOutstandingLoan())

@@ -91,6 +91,32 @@ public class Investment extends TenantAwareEntity {
     @Column(name = "sold_notes", columnDefinition = "TEXT")
     private String soldNotes;
 
+    // Partial Sale Tracking
+    @Column(name = "total_units", precision = 15, scale = 4)
+    @Builder.Default
+    private BigDecimal totalUnits = BigDecimal.ONE; // Default to 1 unit (can represent whole investment)
+
+    @Column(name = "remaining_units", precision = 15, scale = 4)
+    @Builder.Default
+    private BigDecimal remainingUnits = BigDecimal.ONE; // Units not yet sold
+
+    @Column(name = "total_amount_sold", precision = 15, scale = 2)
+    @Builder.Default
+    private BigDecimal totalAmountSold = BigDecimal.ZERO; // Cumulative sale proceeds
+
+    @Column(name = "total_principal_sold", precision = 15, scale = 2)
+    @Builder.Default
+    private BigDecimal totalPrincipalSold = BigDecimal.ZERO; // Principal portion of sold units
+
+    @Column(name = "realized_gain", precision = 15, scale = 2)
+    @Builder.Default
+    private BigDecimal realizedGain = BigDecimal.ZERO; // Cumulative realized profit/loss from sales
+
+    // Sale history
+    @OneToMany(mappedBy = "investment", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @Builder.Default
+    private List<InvestmentSale> sales = new ArrayList<>();
+
     // Value history
     @OneToMany(mappedBy = "investment", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
     @Builder.Default
@@ -147,6 +173,74 @@ public class Investment extends TenantAwareEntity {
             return null;
         }
         return soldAmount.subtract(amountInvested);
+    }
+
+    // ==================== PARTIAL SALE HELPER METHODS ====================
+
+    /**
+     * Get remaining principal (cost basis).
+     * Since amountInvested is now reduced on each sale, it directly represents remaining principal.
+     */
+    public BigDecimal getRemainingPrincipal() {
+        return amountInvested != null ? amountInvested : BigDecimal.ZERO;
+    }
+
+    /**
+     * Get price per unit based on current invested amount
+     */
+    public BigDecimal getPricePerUnit() {
+        if (totalUnits == null || totalUnits.compareTo(BigDecimal.ZERO) == 0) {
+            return amountInvested;
+        }
+        return amountInvested.divide(totalUnits, 4, java.math.RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Get current value per unit
+     */
+    public BigDecimal getCurrentValuePerUnit() {
+        if (remainingUnits == null || remainingUnits.compareTo(BigDecimal.ZERO) == 0) {
+            return currentValue;
+        }
+        return currentValue.divide(remainingUnits, 4, java.math.RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Check if all units have been sold
+     */
+    public boolean isFullySold() {
+        return remainingUnits != null && remainingUnits.compareTo(BigDecimal.ZERO) == 0;
+    }
+
+    /**
+     * Check if this investment has had any partial sales
+     */
+    public boolean hasPartialSales() {
+        return totalAmountSold != null && totalAmountSold.compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    /**
+     * Get percentage of investment that has been sold
+     */
+    public BigDecimal getSoldPercentage() {
+        if (totalUnits == null || totalUnits.compareTo(BigDecimal.ZERO) == 0) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal unitsSold = totalUnits.subtract(remainingUnits != null ? remainingUnits : totalUnits);
+        return unitsSold
+                .multiply(BigDecimal.valueOf(100))
+                .divide(totalUnits, 2, java.math.RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Get unrealized gain (paper profit on remaining units - NOT recorded in books)
+     */
+    public BigDecimal getUnrealizedGain() {
+        BigDecimal remainingPrincipal = getRemainingPrincipal();
+        if (currentValue == null || remainingPrincipal == null) {
+            return BigDecimal.ZERO;
+        }
+        return currentValue.subtract(remainingPrincipal);
     }
 
     public enum InvestmentCategory {

@@ -26,9 +26,11 @@ public class InvestmentService {
     private final InvestmentValueHistoryRepository valueHistoryRepository;
     private final InvestmentApprovalRepository approvalRepository;
     private final InvestmentTopupRepository investmentTopupRepository;
+    private final InvestmentSaleRepository investmentSaleRepository;
     private final MemberRepository memberRepository;
     private final TenantRepository tenantRepository;
     private final TransactionRepository transactionRepository;
+    private final PayoutService payoutService;
 
     public List<InvestmentDto> getAllInvestments(Long tenantId) {
         return investmentRepository.findByTenantIdOrderByDateInvestedDesc(tenantId).stream()
@@ -201,6 +203,25 @@ public class InvestmentService {
     }
 
     private void createInvestmentTransaction(Investment investment) {
+        // ========== LIQUIDITY CHECK ==========
+        // Verify there's enough liquid cash before creating the investment transaction
+        Long tenantId = investment.getTenant().getId();
+        java.math.BigDecimal investmentAmount = investment.getAmountInvested();
+        
+        LiquidityDto liquidity = payoutService.calculateLiquidity(tenantId);
+        if (liquidity.getLiquidCash().compareTo(investmentAmount) < 0) {
+            throw new RuntimeException(String.format(
+                    "Insufficient liquid cash for this investment. " +
+                    "Investment Amount: KES %,.2f, Available: KES %,.2f. " +
+                    "Total Pool: KES %,.2f, Locked in Investments: KES %,.2f, Outstanding Loans: KES %,.2f.",
+                    investmentAmount,
+                    liquidity.getLiquidCash(),
+                    liquidity.getTotalPoolValue(),
+                    liquidity.getLockedInInvestments(),
+                    liquidity.getOutstandingLoans()
+            ));
+        }
+
         Transaction transaction = Transaction.builder()
                 .date(LocalDate.now())
                 .type(Transaction.TransactionType.INVESTMENT)
@@ -288,49 +309,18 @@ public class InvestmentService {
 
         java.math.BigDecimal previousValue = investment.getCurrentValue();
         java.math.BigDecimal newValue = request.getNewValue();
-        java.math.BigDecimal valueChange = newValue.subtract(previousValue);
 
-        // Create value history entry
+        // Create value history entry (for tracking purposes only)
         createValueHistoryEntry(investment, newValue, previousValue, request.getNotes());
         
         // Update current value
         investment.setCurrentValue(newValue);
         investment = investmentRepository.save(investment);
         
-        // Create GL transaction for value change (interest/returns)
-        if (valueChange.compareTo(java.math.BigDecimal.ZERO) > 0) {
-            // Value increased - interest/returns earned
-            String description = String.format("Investment return: %s - %s", 
-                    investment.getName(), 
-                    request.getNotes() != null ? request.getNotes() : "Value appreciation");
-            Transaction transaction = Transaction.builder()
-                    .date(LocalDate.now())
-                    .type(Transaction.TransactionType.INVESTMENT_RETURN)
-                    .description(description)
-                    .amount(valueChange)
-                    .direction(Transaction.TransactionDirection.IN)
-                    .referenceId(investment.getId())
-                    .referenceType("INVESTMENT_RETURN")
-                    .tenant(investment.getTenant())
-                    .build();
-            transactionRepository.save(transaction);
-        } else if (valueChange.compareTo(java.math.BigDecimal.ZERO) < 0) {
-            // Value decreased - loss recorded
-            String description = String.format("Investment loss: %s - %s", 
-                    investment.getName(), 
-                    request.getNotes() != null ? request.getNotes() : "Value depreciation");
-            Transaction transaction = Transaction.builder()
-                    .date(LocalDate.now())
-                    .type(Transaction.TransactionType.INVESTMENT_RETURN)
-                    .description(description)
-                    .amount(valueChange.abs())
-                    .direction(Transaction.TransactionDirection.OUT)
-                    .referenceId(investment.getId())
-                    .referenceType("INVESTMENT_LOSS")
-                    .tenant(investment.getTenant())
-                    .build();
-            transactionRepository.save(transaction);
-        }
+        // NOTE: NO transaction is created for value changes.
+        // Value changes represent UNREALIZED gains/losses.
+        // Gains/losses are only recorded in the finance book when the investment is SOLD.
+        // This follows proper accounting principles where unrealized gains are not income.
         
         return toDto(investment);
     }
@@ -349,32 +339,178 @@ public class InvestmentService {
         }
 
         String currentUser = getCurrentUsername();
-        LocalDate soldDate = request.getSoldDate() != null ? LocalDate.parse(request.getSoldDate()) : LocalDate.now();
+        LocalDate saleDate = request.getSaleDate() != null ? LocalDate.parse(request.getSaleDate()) : LocalDate.now();
         
-        investment.setStatus(Investment.InvestmentStatus.SOLD);
-        investment.setSoldDate(soldDate);
-        investment.setSoldAmount(request.getSoldAmount());
-        investment.setSoldBy(currentUser);
-        investment.setSoldNotes(request.getNotes());
-        investment.setCurrentValue(request.getSoldAmount());
+        // Get sale amount (support both new and legacy field names)
+        java.math.BigDecimal saleAmount = request.getEffectiveSaleAmount();
+        if (saleAmount == null || saleAmount.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Sale amount must be greater than zero");
+        }
+
+        // ==================== PARTIAL SALE LOGIC ====================
+        java.math.BigDecimal totalUnits = investment.getTotalUnits();
+        java.math.BigDecimal remainingUnits = investment.getRemainingUnits();
         
+        // Initialize units if null (for existing investments without unit tracking)
+        if (totalUnits == null || totalUnits.compareTo(java.math.BigDecimal.ZERO) == 0) {
+            totalUnits = java.math.BigDecimal.ONE;
+            investment.setTotalUnits(totalUnits);
+        }
+        if (remainingUnits == null) {
+            remainingUnits = totalUnits;
+            investment.setRemainingUnits(remainingUnits);
+        }
+
+        // Determine units to sell
+        java.math.BigDecimal unitsToSell;
+        boolean isFullSale = Boolean.TRUE.equals(request.getSellAll()) || 
+                            request.getUnitsToSell() == null ||
+                            request.getUnitsToSell().compareTo(remainingUnits) >= 0;
+
+        if (isFullSale) {
+            unitsToSell = remainingUnits;
+        } else {
+            unitsToSell = request.getUnitsToSell();
+            if (unitsToSell.compareTo(remainingUnits) > 0) {
+                throw new RuntimeException(String.format(
+                        "Cannot sell %.4f units. Only %.4f units remaining.",
+                        unitsToSell, remainingUnits));
+            }
+            if (unitsToSell.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+                throw new RuntimeException("Units to sell must be greater than zero");
+            }
+        }
+
+        // Calculate principal portion (cost basis) of units being sold
+        java.math.BigDecimal principalPortion = investment.getAmountInvested()
+                .multiply(unitsToSell)
+                .divide(totalUnits, 2, java.math.RoundingMode.HALF_UP);
+
+        // Calculate realized gain/loss for this sale
+        java.math.BigDecimal realizedGain = saleAmount.subtract(principalPortion);
+
+        // Calculate sale price per unit
+        java.math.BigDecimal salePricePerUnit = unitsToSell.compareTo(java.math.BigDecimal.ZERO) > 0 
+                ? saleAmount.divide(unitsToSell, 4, java.math.RoundingMode.HALF_UP)
+                : java.math.BigDecimal.ZERO;
+
+        // Update remaining units
+        java.math.BigDecimal newRemainingUnits = remainingUnits.subtract(unitsToSell);
+        investment.setRemainingUnits(newRemainingUnits);
+
+        // Update cumulative sale tracking
+        java.math.BigDecimal totalAmountSold = investment.getTotalAmountSold() != null 
+                ? investment.getTotalAmountSold() : java.math.BigDecimal.ZERO;
+        java.math.BigDecimal totalPrincipalSold = investment.getTotalPrincipalSold() != null 
+                ? investment.getTotalPrincipalSold() : java.math.BigDecimal.ZERO;
+        java.math.BigDecimal cumulativeRealizedGain = investment.getRealizedGain() != null 
+                ? investment.getRealizedGain() : java.math.BigDecimal.ZERO;
+
+        investment.setTotalAmountSold(totalAmountSold.add(saleAmount));
+        investment.setTotalPrincipalSold(totalPrincipalSold.add(principalPortion));
+        investment.setRealizedGain(cumulativeRealizedGain.add(realizedGain));
+
+        // ==================== REDUCE PRINCIPAL (amountInvested) ====================
+        // The principal should decrease by the cost basis portion that was sold
+        java.math.BigDecimal currentPrincipal = investment.getAmountInvested();
+        java.math.BigDecimal newPrincipal = currentPrincipal.subtract(principalPortion);
+        if (newPrincipal.compareTo(java.math.BigDecimal.ZERO) < 0) {
+            newPrincipal = java.math.BigDecimal.ZERO;
+        }
+        investment.setAmountInvested(newPrincipal);
+
+        // Update current value to reflect remaining units
+        // Current value should be reduced proportionally based on units sold
+        java.math.BigDecimal currentValue = investment.getCurrentValue();
+        if (isFullSale) {
+            investment.setCurrentValue(java.math.BigDecimal.ZERO);
+        } else {
+            // Reduce current value proportionally
+            java.math.BigDecimal valueReduction = currentValue
+                    .multiply(unitsToSell)
+                    .divide(remainingUnits, 2, java.math.RoundingMode.HALF_UP);
+            investment.setCurrentValue(currentValue.subtract(valueReduction));
+        }
+
+        // If fully sold, update status
+        if (isFullSale || newRemainingUnits.compareTo(java.math.BigDecimal.ZERO) == 0) {
+            investment.setStatus(Investment.InvestmentStatus.SOLD);
+            investment.setSoldDate(saleDate);
+            investment.setSoldAmount(investment.getTotalAmountSold());
+            investment.setSoldBy(currentUser);
+            investment.setSoldNotes(request.getNotes());
+        }
+
         investment = investmentRepository.save(investment);
 
-        // Create value history entry for sale
-        createValueHistoryEntry(investment, request.getSoldAmount(), investment.getCurrentValue(), "Investment sold: " + request.getNotes());
+        // ==================== CREATE SALE RECORD ====================
+        InvestmentSale sale = InvestmentSale.builder()
+                .investment(investment)
+                .saleDate(saleDate)
+                .unitsSold(unitsToSell)
+                .unitsRemainingAfter(newRemainingUnits)
+                .salePricePerUnit(salePricePerUnit)
+                .totalSaleAmount(saleAmount)
+                .principalPortion(principalPortion)
+                .realizedGain(realizedGain)
+                .isFullSale(isFullSale)
+                .soldBy(currentUser)
+                .notes(request.getNotes())
+                .recordedAt(LocalDateTime.now())
+                .build();
+        investmentSaleRepository.save(sale);
 
-        // Create transaction for sale proceeds
-        Transaction transaction = Transaction.builder()
-                .date(soldDate)
+        // Create value history entry for sale
+        String saleDescription = isFullSale 
+                ? "Investment fully sold" 
+                : String.format("Partial sale: %.4f of %.4f units", unitsToSell, totalUnits);
+        if (request.getNotes() != null) {
+            saleDescription += " - " + request.getNotes();
+        }
+        createValueHistoryEntry(investment, investment.getCurrentValue(), currentValue, saleDescription);
+
+        // ==================== CREATE FINANCIAL TRANSACTIONS ====================
+        // Transaction 1: Sale proceeds coming IN (the cash received)
+        Transaction saleTx = Transaction.builder()
+                .date(saleDate)
                 .type(Transaction.TransactionType.INVESTMENT)
-                .description("Sale of Investment: " + investment.getName())
-                .amount(request.getSoldAmount())
+                .description((isFullSale ? "Full sale" : "Partial sale") + " of Investment: " + investment.getName())
+                .amount(saleAmount)
                 .direction(Transaction.TransactionDirection.IN)
                 .referenceId(investment.getId())
                 .referenceType("INVESTMENT_SALE")
                 .tenant(investment.getTenant())
                 .build();
-        transactionRepository.save(transaction);
+        transactionRepository.save(saleTx);
+
+        // Transaction 2: Record realized gain/loss as income/expense
+        if (realizedGain.compareTo(java.math.BigDecimal.ZERO) > 0) {
+            // Realized GAIN - income earned
+            Transaction gainTx = Transaction.builder()
+                    .date(saleDate)
+                    .type(Transaction.TransactionType.INVESTMENT_RETURN)
+                    .description("Realized gain on investment sale: " + investment.getName())
+                    .amount(realizedGain)
+                    .direction(Transaction.TransactionDirection.IN)
+                    .referenceId(sale.getId())
+                    .referenceType("INVESTMENT_REALIZED_GAIN")
+                    .tenant(investment.getTenant())
+                    .build();
+            transactionRepository.save(gainTx);
+        } else if (realizedGain.compareTo(java.math.BigDecimal.ZERO) < 0) {
+            // Realized LOSS - expense recorded
+            Transaction lossTx = Transaction.builder()
+                    .date(saleDate)
+                    .type(Transaction.TransactionType.INVESTMENT_RETURN)
+                    .description("Realized loss on investment sale: " + investment.getName())
+                    .amount(realizedGain.abs())
+                    .direction(Transaction.TransactionDirection.OUT)
+                    .referenceId(sale.getId())
+                    .referenceType("INVESTMENT_REALIZED_LOSS")
+                    .tenant(investment.getTenant())
+                    .build();
+            transactionRepository.save(lossTx);
+        }
 
         return toDto(investment);
     }
@@ -405,19 +541,11 @@ public class InvestmentService {
         
         investment = investmentRepository.save(investment);
         
-        // Create transaction to record the write-off loss
-        // This is an OUT transaction representing the loss of the invested amount
-        Transaction transaction = Transaction.builder()
-                .date(LocalDate.now())
-                .type(Transaction.TransactionType.INVESTMENT)
-                .description("Investment Write-Off: " + investment.getName() + " - " + notes)
-                .amount(writeOffAmount)
-                .direction(Transaction.TransactionDirection.OUT)
-                .referenceId(investment.getId())
-                .referenceType("INVESTMENT_WRITE_OFF")
-                .tenant(investment.getTenant())
-                .build();
-        transactionRepository.save(transaction);
+        // NOTE: We do NOT create a transaction here because:
+        // 1. The money was already debited when we first invested (OUT transaction created at investment approval)
+        // 2. A write-off just acknowledges that the invested money is lost/unrecoverable
+        // 3. Creating another OUT transaction would incorrectly double-count the loss
+        // The write-off is tracked in the investment status and value history for reporting purposes
         
         return toDto(investmentRepository.findByIdAndTenantId(id, tenantId).orElse(investment));
     }
@@ -443,6 +571,23 @@ public class InvestmentService {
         
         if (investment.getApprovalStatus() != Investment.ApprovalStatus.APPROVED) {
             throw new RuntimeException("Investment must be approved before adding principal");
+        }
+
+        // ========== LIQUIDITY CHECK ==========
+        // Verify there's enough liquid cash before adding to the investment
+        java.math.BigDecimal topupAmount = request.getAmount();
+        LiquidityDto liquidity = payoutService.calculateLiquidity(tenantId);
+        if (liquidity.getLiquidCash().compareTo(topupAmount) < 0) {
+            throw new RuntimeException(String.format(
+                    "Insufficient liquid cash for investment top-up. " +
+                    "Top-up Amount: KES %,.2f, Available: KES %,.2f. " +
+                    "Total Pool: KES %,.2f, Locked in Investments: KES %,.2f, Outstanding Loans: KES %,.2f.",
+                    topupAmount,
+                    liquidity.getLiquidCash(),
+                    liquidity.getTotalPoolValue(),
+                    liquidity.getLockedInInvestments(),
+                    liquidity.getOutstandingLoans()
+            ));
         }
 
         Member recordedBy = null;
@@ -579,6 +724,19 @@ public class InvestmentService {
                 .soldBy(investment.getSoldBy())
                 .soldNotes(investment.getSoldNotes())
                 .finalGain(investment.getFinalGain())
+                // Partial sale fields
+                .totalUnits(investment.getTotalUnits())
+                .remainingUnits(investment.getRemainingUnits())
+                .totalAmountSold(investment.getTotalAmountSold())
+                .totalPrincipalSold(investment.getTotalPrincipalSold())
+                .realizedGain(investment.getRealizedGain())
+                .unrealizedGain(investment.getUnrealizedGain())
+                .remainingPrincipal(investment.getRemainingPrincipal())
+                .pricePerUnit(investment.getPricePerUnit())
+                .currentValuePerUnit(investment.getCurrentValuePerUnit())
+                .soldPercentage(investment.getSoldPercentage())
+                .hasPartialSales(investment.hasPartialSales())
+                .isFullySold(investment.isFullySold())
                 .build();
     }
 
@@ -622,5 +780,36 @@ public class InvestmentService {
         dto.setRecordedByName(topup.getRecordedByName());
         dto.setRecordedAt(topup.getRecordedAt());
         return dto;
+    }
+
+    // ==================== SALE HISTORY ====================
+
+    public List<InvestmentSaleDto> getSaleHistory(Long investmentId, Long tenantId) {
+        // Verify investment belongs to tenant
+        investmentRepository.findByIdAndTenantId(investmentId, tenantId)
+                .orElseThrow(() -> new RuntimeException("Investment not found"));
+        
+        return investmentSaleRepository.findByInvestmentIdOrderBySaleDateDesc(investmentId).stream()
+                .map(this::toSaleDto)
+                .collect(Collectors.toList());
+    }
+
+    private InvestmentSaleDto toSaleDto(InvestmentSale sale) {
+        return InvestmentSaleDto.builder()
+                .id(sale.getId())
+                .investmentId(sale.getInvestment().getId())
+                .saleDate(sale.getSaleDate().toString())
+                .unitsSold(sale.getUnitsSold())
+                .unitsRemainingAfter(sale.getUnitsRemainingAfter())
+                .salePricePerUnit(sale.getSalePricePerUnit())
+                .totalSaleAmount(sale.getTotalSaleAmount())
+                .principalPortion(sale.getPrincipalPortion())
+                .realizedGain(sale.getRealizedGain())
+                .gainPercentage(sale.getGainPercentage())
+                .isFullSale(sale.getIsFullSale())
+                .soldBy(sale.getSoldBy())
+                .notes(sale.getNotes())
+                .recordedAt(sale.getRecordedAt() != null ? sale.getRecordedAt().toString() : null)
+                .build();
     }
 }

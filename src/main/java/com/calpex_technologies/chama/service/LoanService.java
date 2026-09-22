@@ -1,5 +1,6 @@
 package com.calpex_technologies.chama.service;
 
+import com.calpex_technologies.chama.dto.LiquidityDto;
 import com.calpex_technologies.chama.dto.LoanDto;
 import com.calpex_technologies.chama.dto.LoanEligibilityDto;
 import com.calpex_technologies.chama.dto.LoanIncomeSummaryDto;
@@ -46,6 +47,7 @@ public class LoanService {
     private final LoanPaymentRepository loanPaymentRepository;
     private final PayableRepository payableRepository;
     private final PaymentClaimRepository paymentClaimRepository;
+    private final PayoutService payoutService;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -900,6 +902,27 @@ public class LoanService {
             throw new RuntimeException("Loan is not approved for disbursement");
         }
 
+        // ========== LIQUIDITY CHECK ==========
+        // Calculate disbursement amount (net amount after upfront fee deduction)
+        BigDecimal disbursementAmount = loan.getNetDisbursementAmount() != null 
+                ? loan.getNetDisbursementAmount() 
+                : loan.getPrincipal();
+        
+        // Check if there's enough liquid cash available
+        LiquidityDto liquidity = payoutService.calculateLiquidity(tenantId);
+        if (liquidity.getLiquidCash().compareTo(disbursementAmount) < 0) {
+            throw new RuntimeException(String.format(
+                    "Insufficient liquid cash for loan disbursement. " +
+                    "Required: KES %,.2f, Available: KES %,.2f. " +
+                    "Total Pool: KES %,.2f, Locked in Investments: KES %,.2f, Outstanding Loans: KES %,.2f.",
+                    disbursementAmount,
+                    liquidity.getLiquidCash(),
+                    liquidity.getTotalPoolValue(),
+                    liquidity.getLockedInInvestments(),
+                    liquidity.getOutstandingLoans()
+            ));
+        }
+
         loan.setStatus(Loan.LoanStatus.ACTIVE);
         loan.setDisbursedOn(LocalDate.now());
         loan.setNextDueDate(LocalDate.now().plusMonths(1));
@@ -920,11 +943,7 @@ public class LoanService {
         member.setOutstandingLoan(outstanding != null ? outstanding : BigDecimal.ZERO);
         memberRepository.save(member);
 
-        // Create transaction for disbursement - use net amount (after upfront fee deduction)
-        BigDecimal disbursementAmount = loan.getNetDisbursementAmount() != null 
-                ? loan.getNetDisbursementAmount() 
-                : loan.getPrincipal();
-        
+        // Create transaction for disbursement - use the already calculated disbursementAmount
         Transaction disbursementTx = Transaction.builder()
                 .date(LocalDate.now())
                 .type(Transaction.TransactionType.LOAN_DISBURSEMENT)

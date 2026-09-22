@@ -21,6 +21,7 @@ public class HttpConfigurer {
         http.authorizeHttpRequests(auth -> auth
             // ==================== PUBLIC ENDPOINTS ====================
             .requestMatchers("/api/auth/login", "/api/auth/login/**", "/api/auth/super-admin/login").permitAll()
+            .requestMatchers("GET", "/api/platform/contact-info").permitAll()  // Public contact info for login page
             // Change password, logout, and session verification require authentication
             .requestMatchers("/api/auth/change-password").authenticated()
             .requestMatchers("/api/auth/logout").authenticated()
@@ -238,11 +239,16 @@ public class HttpConfigurer {
             // Regular users can access their own tenant settings
             .requestMatchers("GET", "/api/tenants/settings").hasAnyAuthority("FULL_ACCESS", "VIEW_TENANT_SETTINGS")
             .requestMatchers("PUT", "/api/tenants/settings").hasAnyAuthority("FULL_ACCESS", "EDIT_TENANT_SETTINGS")
+            // Allow admins with MANAGE_ROLE_PERMISSIONS to change member roles
+            .requestMatchers("PUT", "/api/tenants/{tenantId}/members/{memberId}/role").hasAnyAuthority("FULL_ACCESS", "MANAGE_ROLE_PERMISSIONS")
             // Super admin operations for specific tenants
             .requestMatchers("/api/tenants/**").hasAuthority("FULL_ACCESS")
             
             // ==================== SYSTEM SETTINGS (Super Admin only) ====================
             .requestMatchers("/api/system-settings/**").hasAuthority("FULL_ACCESS")
+            
+            // ==================== PLATFORM SETTINGS (Super Admin only for update) ====================
+            .requestMatchers("PUT", "/api/platform/contact-info").hasAuthority("FULL_ACCESS")
             
             // ==================== DASHBOARD ====================
             .requestMatchers("GET", "/api/dashboard/**").hasAnyAuthority("FULL_ACCESS", "VIEW_DASHBOARD")

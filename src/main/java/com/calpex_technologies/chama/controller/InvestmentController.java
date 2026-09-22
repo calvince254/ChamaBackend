@@ -147,11 +147,19 @@ public class InvestmentController {
         return ResponseEntity.ok(investmentService.getTopupHistory(id, principal.getTenantId()));
     }
 
+    @GetMapping("/{id}/sales")
+    public ResponseEntity<List<InvestmentSaleDto>> getSaleHistory(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(investmentService.getSaleHistory(id, principal.getTenantId()));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteInvestment(
             @PathVariable Long id,
             @AuthenticationPrincipal UserPrincipal principal) {
-        investmentService.deleteInvestment(id, principal.getTenantId());
-        return ResponseEntity.noContent().build();
+        // Investments cannot be deleted - they must be sold or written off
+        // This preserves financial history and audit trail
+        throw new RuntimeException("Investments cannot be deleted. Use 'Sell' to exit an investment or 'Write Off' if the investment has lost all value.");
     }
 }

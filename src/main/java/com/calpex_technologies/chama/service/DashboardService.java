@@ -59,20 +59,6 @@ public class DashboardService {
         // Calculate investment value
         BigDecimal investmentValue = calculateInvestmentValue(tenantId);
         
-        // Calculate fund allocation percentages
-        BigDecimal totalFunds = totalSavings.add(investmentValue).add(welfareBalance).add(loansOutstanding);
-        BigDecimal savingsPercent = BigDecimal.ZERO;
-        BigDecimal investmentsPercent = BigDecimal.ZERO;
-        BigDecimal welfarePercent = BigDecimal.ZERO;
-        BigDecimal loansPercent = BigDecimal.ZERO;
-        
-        if (totalFunds.compareTo(BigDecimal.ZERO) > 0) {
-            savingsPercent = totalSavings.multiply(BigDecimal.valueOf(100)).divide(totalFunds, 0, RoundingMode.HALF_UP);
-            investmentsPercent = investmentValue.multiply(BigDecimal.valueOf(100)).divide(totalFunds, 0, RoundingMode.HALF_UP);
-            welfarePercent = welfareBalance.multiply(BigDecimal.valueOf(100)).divide(totalFunds, 0, RoundingMode.HALF_UP);
-            loansPercent = loansOutstanding.multiply(BigDecimal.valueOf(100)).divide(totalFunds, 0, RoundingMode.HALF_UP);
-        }
-        
         // Calculate ledger balance (total credits - total debits)
         BigDecimal totalCredits = BigDecimal.ZERO;
         BigDecimal totalDebits = BigDecimal.ZERO;
@@ -84,6 +70,38 @@ public class DashboardService {
         }
         BigDecimal ledgerBalance = (totalCredits != null ? totalCredits : BigDecimal.ZERO)
                 .subtract(totalDebits != null ? totalDebits : BigDecimal.ZERO);
+        
+        // Calculate fund allocation percentages based on LEDGER BALANCE distribution
+        // The ledger balance represents actual money - we need to show where it currently sits
+        // Total funds = ledger balance (what we actually have)
+        // Breakdown: Liquid Cash + Active Investments + Outstanding Loans + Welfare = Total
+        
+        // For fund allocation, we use:
+        // - investmentValue: money currently locked in active investments
+        // - loansOutstanding: money out as loans (will be repaid)
+        // - welfareBalance: welfare fund balance
+        // - liquidCash: ledger balance minus above (what's available for use)
+        
+        BigDecimal liquidCash = ledgerBalance.subtract(investmentValue).subtract(loansOutstanding);
+        if (liquidCash.compareTo(BigDecimal.ZERO) < 0) {
+            liquidCash = BigDecimal.ZERO;
+        }
+        
+        // Total funds for percentage calculation = what we have deployed + liquid
+        BigDecimal totalFundsForAllocation = liquidCash.add(investmentValue).add(loansOutstanding).add(welfareBalance);
+        
+        BigDecimal savingsPercent = BigDecimal.ZERO;
+        BigDecimal investmentsPercent = BigDecimal.ZERO;
+        BigDecimal welfarePercent = BigDecimal.ZERO;
+        BigDecimal loansPercent = BigDecimal.ZERO;
+        
+        if (totalFundsForAllocation.compareTo(BigDecimal.ZERO) > 0) {
+            // Savings % = liquid cash (money not deployed to investments/loans)
+            savingsPercent = liquidCash.multiply(BigDecimal.valueOf(100)).divide(totalFundsForAllocation, 0, RoundingMode.HALF_UP);
+            investmentsPercent = investmentValue.multiply(BigDecimal.valueOf(100)).divide(totalFundsForAllocation, 0, RoundingMode.HALF_UP);
+            welfarePercent = welfareBalance.multiply(BigDecimal.valueOf(100)).divide(totalFundsForAllocation, 0, RoundingMode.HALF_UP);
+            loansPercent = loansOutstanding.multiply(BigDecimal.valueOf(100)).divide(totalFundsForAllocation, 0, RoundingMode.HALF_UP);
+        }
         
         // Get fund growth data (last 6 months)
         List<FundGrowthPoint> fundGrowth = calculateFundGrowth(tenantId);

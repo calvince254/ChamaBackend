@@ -43,7 +43,7 @@ public interface InvestmentRepository extends JpaRepository<Investment, Long> {
     @Query("SELECT i FROM Investment i WHERE i.tenant.id = :tenantId AND i.approvalStatus = 'APPROVED'")
     List<Investment> findApprovedByTenantId(Long tenantId);
     
-    @Query("SELECT COALESCE(SUM(i.currentValue), 0) FROM Investment i WHERE i.tenant.id = :tenantId AND i.approvalStatus = 'APPROVED'")
+    @Query("SELECT COALESCE(SUM(i.currentValue), 0) FROM Investment i WHERE i.tenant.id = :tenantId AND i.approvalStatus = 'APPROVED' AND i.status = 'ACTIVE'")
     BigDecimal sumCurrentValueByTenantId(Long tenantId);
     
     @Query("SELECT i FROM Investment i WHERE i.tenant.id = :tenantId AND i.approvalStatus = 'PENDING'")
