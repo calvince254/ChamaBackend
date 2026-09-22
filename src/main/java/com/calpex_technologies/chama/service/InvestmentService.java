@@ -93,7 +93,7 @@ public class InvestmentService {
                 .amountInvested(dto.getAmountInvested())
                 .currentValue(dto.getAmountInvested())
                 .approvalStatus(requiresApproval ? Investment.ApprovalStatus.PENDING : Investment.ApprovalStatus.APPROVED)
-                .status(Investment.InvestmentStatus.ACTIVE)
+                .status(requiresApproval ? Investment.InvestmentStatus.PENDING : Investment.InvestmentStatus.ACTIVE)
                 .description(dto.getDescription())
                 .requiresApproval(requiresApproval)
                 .requiredApprovals(approverIds != null ? approverIds.size() : 0)
@@ -173,6 +173,7 @@ public class InvestmentService {
         // If any rejection, reject the investment
         if (rejectionCount > 0) {
             investment.setApprovalStatus(Investment.ApprovalStatus.REJECTED);
+            investment.setStatus(Investment.InvestmentStatus.CANCELLED);
             // Get rejection reason from the rejector
             investment.getApprovals().stream()
                     .filter(a -> a.getDecision() == InvestmentApproval.ApprovalDecision.REJECTED)
@@ -185,6 +186,7 @@ public class InvestmentService {
         // If all required approvers have approved
         if (approvalCount >= required) {
             investment.setApprovalStatus(Investment.ApprovalStatus.APPROVED);
+            investment.setStatus(Investment.InvestmentStatus.ACTIVE);
             investment.setDateInvested(LocalDate.now());
             investment.setApprovedAt(LocalDateTime.now());
             
@@ -203,25 +205,7 @@ public class InvestmentService {
     }
 
     private void createInvestmentTransaction(Investment investment) {
-        // ========== LIQUIDITY CHECK ==========
-        // Verify there's enough liquid cash before creating the investment transaction
-        Long tenantId = investment.getTenant().getId();
-        java.math.BigDecimal investmentAmount = investment.getAmountInvested();
-        
-        LiquidityDto liquidity = payoutService.calculateLiquidity(tenantId);
-        if (liquidity.getLiquidCash().compareTo(investmentAmount) < 0) {
-            throw new RuntimeException(String.format(
-                    "Insufficient liquid cash for this investment. " +
-                    "Investment Amount: KES %,.2f, Available: KES %,.2f. " +
-                    "Total Pool: KES %,.2f, Locked in Investments: KES %,.2f, Outstanding Loans: KES %,.2f.",
-                    investmentAmount,
-                    liquidity.getLiquidCash(),
-                    liquidity.getTotalPoolValue(),
-                    liquidity.getLockedInInvestments(),
-                    liquidity.getOutstandingLoans()
-            ));
-        }
-
+        // Create the investment transaction (debit from pool)
         Transaction transaction = Transaction.builder()
                 .date(LocalDate.now())
                 .type(Transaction.TransactionType.INVESTMENT)
@@ -573,22 +557,7 @@ public class InvestmentService {
             throw new RuntimeException("Investment must be approved before adding principal");
         }
 
-        // ========== LIQUIDITY CHECK ==========
-        // Verify there's enough liquid cash before adding to the investment
-        java.math.BigDecimal topupAmount = request.getAmount();
-        LiquidityDto liquidity = payoutService.calculateLiquidity(tenantId);
-        if (liquidity.getLiquidCash().compareTo(topupAmount) < 0) {
-            throw new RuntimeException(String.format(
-                    "Insufficient liquid cash for investment top-up. " +
-                    "Top-up Amount: KES %,.2f, Available: KES %,.2f. " +
-                    "Total Pool: KES %,.2f, Locked in Investments: KES %,.2f, Outstanding Loans: KES %,.2f.",
-                    topupAmount,
-                    liquidity.getLiquidCash(),
-                    liquidity.getTotalPoolValue(),
-                    liquidity.getLockedInInvestments(),
-                    liquidity.getOutstandingLoans()
-            ));
-        }
+        // Note: Liquidity validation is done on the frontend based on displayed liquid cash
 
         Member recordedBy = null;
         String recordedByName = getCurrentUsername();

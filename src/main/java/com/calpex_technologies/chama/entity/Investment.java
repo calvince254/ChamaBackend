@@ -252,8 +252,10 @@ public class Investment extends TenantAwareEntity {
     }
 
     public enum InvestmentStatus {
-        ACTIVE,     // Currently held
-        SOLD,       // Exited/sold
-        WRITTEN_OFF // Lost value completely
+        PENDING,     // Awaiting approval
+        ACTIVE,      // Currently held (approved and active)
+        SOLD,        // Exited/sold
+        WRITTEN_OFF, // Lost value completely
+        CANCELLED    // Rejected/cancelled before activation
     }
 }
