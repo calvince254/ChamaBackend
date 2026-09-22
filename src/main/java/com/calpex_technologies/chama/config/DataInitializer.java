@@ -42,7 +42,7 @@ public class DataInitializer implements CommandLineRunner {
     }
 
     private void initializeSuperAdmin() {
-        if (memberRepository.findByEmail("admin@chamamanager.app").isPresent()) {
+        if (memberRepository.findByEmail("cobuya254@gmail.com").isPresent()) {
             log.info("Super admin already exists, skipping initialization.");
             return;
         }
@@ -51,9 +51,9 @@ public class DataInitializer implements CommandLineRunner {
 
         Member superAdmin = Member.builder()
                 .name("Platform Admin")
-                .phone("+254700000000")
-                .email("admin@chamamanager.app")
-                .password(passwordEncoder.encode("admin123"))
+                .phone("+254706619252")
+                .email("cobuya254@gmail.com")
+                .password(passwordEncoder.encode("admin@123"))
                 .memberNo("SA001")
                 .joinDate(LocalDate.now())
                 .status(Member.MemberStatus.ACTIVE)
@@ -65,8 +65,8 @@ public class DataInitializer implements CommandLineRunner {
         log.info("==============================================");
         log.info("Platform initialized successfully!");
         log.info("Super Admin credentials:");
-        log.info("  Email: admin@chamamanager.app");
-        log.info("  Password: admin123");
+        log.info("  Email: cobuya254@gmail.com");
+        log.info("  Password: admin@123");
         log.info("==============================================");
     }
 
