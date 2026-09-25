@@ -10,6 +10,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
@@ -268,6 +272,32 @@ public class ShareCalculationService {
                 .memberShares(memberShares)
                 .calculatedAt(LocalDateTime.now().toString())
                 .build();
+    }
+
+    // ==================== PAGINATED MEMBER SHARES ====================
+
+    /**
+     * Get paginated member shares - returns same data as calculateShares but with pagination
+     */
+    public Page<MemberShareDto> getMemberSharesPaginated(Long tenantId, Pageable pageable) {
+        // Calculate all member shares using existing logic
+        ShareCalculationDto fullCalculation = calculateShares(tenantId);
+        List<MemberShareDto> allMemberShares = fullCalculation.getMemberShares();
+        
+        if (allMemberShares == null || allMemberShares.isEmpty()) {
+            return new PageImpl<>(new ArrayList<>(), pageable, 0);
+        }
+        
+        // Apply pagination manually since data is calculated, not from DB
+        int start = (int) pageable.getOffset();
+        int end = Math.min(start + pageable.getPageSize(), allMemberShares.size());
+        
+        if (start > allMemberShares.size()) {
+            return new PageImpl<>(new ArrayList<>(), pageable, allMemberShares.size());
+        }
+        
+        List<MemberShareDto> pageContent = allMemberShares.subList(start, end);
+        return new PageImpl<>(pageContent, pageable, allMemberShares.size());
     }
 
     // ==================== HELPER METHODS ====================

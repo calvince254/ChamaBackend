@@ -1,6 +1,8 @@
 package com.calpex_technologies.chama.repository;
 
 import com.calpex_technologies.chama.entity.WelfareContribution;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -11,6 +13,8 @@ import java.util.Optional;
 public interface WelfareContributionRepository extends JpaRepository<WelfareContribution, Long> {
 
     List<WelfareContribution> findByWelfareEventIdAndTenantId(Long welfareEventId, Long tenantId);
+
+    Page<WelfareContribution> findByWelfareEventIdAndTenantId(Long welfareEventId, Long tenantId, Pageable pageable);
 
     Optional<WelfareContribution> findByIdAndTenantId(Long id, Long tenantId);
 

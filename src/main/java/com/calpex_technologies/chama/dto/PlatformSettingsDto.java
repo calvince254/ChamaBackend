@@ -13,4 +13,5 @@ public class PlatformSettingsDto {
     private String contactPhone;
     private String contactEmail;
     private String contactName;
+    private String officialWebsite;
 }

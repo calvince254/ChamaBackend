@@ -1,5 +1,6 @@
 package com.calpex_technologies.chama.controller;
 
+import com.calpex_technologies.chama.dto.MemberShareDto;
 import com.calpex_technologies.chama.dto.ShareCalculationDto;
 import com.calpex_technologies.chama.dto.ShareDto;
 import com.calpex_technologies.chama.dto.ShareSettingsDto;
@@ -7,6 +8,9 @@ import com.calpex_technologies.chama.security.UserPrincipal;
 import com.calpex_technologies.chama.service.ShareCalculationService;
 import com.calpex_technologies.chama.service.ShareService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -60,5 +64,14 @@ public class ShareController {
     @GetMapping
     public ResponseEntity<ShareCalculationDto> calculateShares(@AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(shareCalculationService.calculateShares(principal.getTenantId()));
+    }
+
+    @GetMapping("/members/paginated")
+    public ResponseEntity<Page<MemberShareDto>> getMemberSharesPaginated(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        Pageable pageable = PageRequest.of(page, size);
+        return ResponseEntity.ok(shareCalculationService.getMemberSharesPaginated(principal.getTenantId(), pageable));
     }
 }

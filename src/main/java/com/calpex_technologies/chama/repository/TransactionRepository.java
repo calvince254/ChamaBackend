@@ -21,6 +21,12 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
     @Query("SELECT t FROM Transaction t WHERE t.tenant.id = :tenantId AND t.date BETWEEN :startDate AND :endDate ORDER BY t.date DESC")
     List<Transaction> findByTenantIdAndDateBetween(Long tenantId, LocalDate startDate, LocalDate endDate);
     
+    @Query("SELECT t FROM Transaction t WHERE t.tenant.id = :tenantId AND t.date >= :startDate ORDER BY t.date DESC")
+    List<Transaction> findByTenantIdAndDateGreaterThanEqual(@Param("tenantId") Long tenantId, @Param("startDate") LocalDate startDate);
+    
+    @Query("SELECT t FROM Transaction t WHERE t.tenant.id = :tenantId AND t.date <= :endDate ORDER BY t.date DESC")
+    List<Transaction> findByTenantIdAndDateLessThanEqual(@Param("tenantId") Long tenantId, @Param("endDate") LocalDate endDate);
+    
     @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t WHERE t.tenant.id = :tenantId AND t.direction = 'IN' AND t.date BETWEEN :startDate AND :endDate")
     BigDecimal sumIncomeByTenantIdAndDateBetween(Long tenantId, LocalDate startDate, LocalDate endDate);
     

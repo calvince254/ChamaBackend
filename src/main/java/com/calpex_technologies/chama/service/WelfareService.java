@@ -171,6 +171,47 @@ public class WelfareService {
         return toContributionDtoListWithPendingClaims(contributions, tenantId);
     }
 
+    public Page<WelfareContributionDto> getEventContributionsPaginated(Long eventId, Long tenantId, int page, int size) {
+        // Verify event exists and belongs to tenant
+        welfareEventRepository.findByIdAndTenantId(eventId, tenantId)
+                .orElseThrow(() -> new RuntimeException("Welfare event not found"));
+
+        Pageable pageable = PageRequest.of(page, size);
+        Page<WelfareContribution> contributions = welfareContributionRepository.findByWelfareEventIdAndTenantId(eventId, tenantId, pageable);
+        
+        // Get pending claims for all contributions in this page
+        List<Long> contributionIds = contributions.getContent().stream()
+                .map(WelfareContribution::getId)
+                .collect(Collectors.toList());
+        
+        // Find payables for these contributions to check for pending claims
+        List<Payable> payables = payableRepository
+                .findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
+                        tenantId,
+                        PayableType.WELFARE_DUE,
+                        contributionIds,
+                        PayableStatus.OUTSTANDING);
+        
+        // Get payable IDs to check for pending claims
+        List<Long> payableIds = payables.stream()
+                .map(Payable::getId)
+                .collect(Collectors.toList());
+        
+        Set<Long> contributionsWithPendingClaims = payables.stream()
+                .filter(p -> payableIds.contains(p.getId()))
+                .map(Payable::getPayableRefId)
+                .collect(Collectors.toSet());
+        
+        Map<Long, Long> payableIdMap = payables.stream()
+                .collect(Collectors.toMap(Payable::getPayableRefId, Payable::getId, (a, b) -> a));
+        
+        return contributions.map(c -> {
+            boolean hasPendingClaim = contributionsWithPendingClaims.contains(c.getId());
+            Long payableId = payableIdMap.get(c.getId());
+            return toContributionDto(c, hasPendingClaim, payableId);
+        });
+    }
+
     @Transactional
     public WelfareContributionDto updateContributionPayment(Long eventId, Long memberId, Boolean paid, Long tenantId) {
         WelfareEvent event = welfareEventRepository.findByIdAndTenantId(eventId, tenantId)

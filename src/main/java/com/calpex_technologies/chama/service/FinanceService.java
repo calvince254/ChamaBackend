@@ -55,50 +55,57 @@ public class FinanceService {
                 .collect(Collectors.toList());
     }
 
-    public Page<TransactionDto> getTransactionsPaginated(Long tenantId, int page, int size, String type, String direction, Long memberId) {
+    public Page<TransactionDto> getTransactionsPaginated(Long tenantId, int page, int size, String type, String direction, Long memberId, LocalDate startDate, LocalDate endDate) {
         Pageable pageable = PageRequest.of(page, size);
-        Page<Transaction> transactionPage;
         
-        boolean hasType = type != null && !type.isEmpty();
-        boolean hasDirection = direction != null && !direction.isEmpty();
-        boolean hasMember = memberId != null;
+        // Get filtered list first, then paginate
+        List<TransactionDto> allFiltered = getTransactionsFiltered(tenantId, startDate, endDate, type, direction, memberId);
         
-        // Build query based on filters - using specification pattern would be cleaner but this works
-        if (hasMember) {
-            if (hasType && hasDirection) {
-                Transaction.TransactionType txType = Transaction.TransactionType.valueOf(type);
-                Transaction.TransactionDirection txDirection = Transaction.TransactionDirection.valueOf(direction);
-                transactionPage = transactionRepository.findByTenantIdAndMemberIdAndTypeAndDirection(tenantId, memberId, txType, txDirection, pageable);
-            } else if (hasType) {
-                Transaction.TransactionType txType = Transaction.TransactionType.valueOf(type);
-                transactionPage = transactionRepository.findByTenantIdAndMemberIdAndType(tenantId, memberId, txType, pageable);
-            } else if (hasDirection) {
-                Transaction.TransactionDirection txDirection = Transaction.TransactionDirection.valueOf(direction);
-                transactionPage = transactionRepository.findByTenantIdAndMemberIdAndDirection(tenantId, memberId, txDirection, pageable);
-            } else {
-                transactionPage = transactionRepository.findByTenantIdAndMemberIdOrderByDateDescIdDesc(tenantId, memberId, pageable);
-            }
-        } else {
-            if (hasType && hasDirection) {
-                Transaction.TransactionType txType = Transaction.TransactionType.valueOf(type);
-                Transaction.TransactionDirection txDirection = Transaction.TransactionDirection.valueOf(direction);
-                transactionPage = transactionRepository.findByTenantIdAndTypeAndDirection(tenantId, txType, txDirection, pageable);
-            } else if (hasType) {
-                Transaction.TransactionType txType = Transaction.TransactionType.valueOf(type);
-                transactionPage = transactionRepository.findByTenantIdAndType(tenantId, txType, pageable);
-            } else if (hasDirection) {
-                Transaction.TransactionDirection txDirection = Transaction.TransactionDirection.valueOf(direction);
-                transactionPage = transactionRepository.findByTenantIdAndDirection(tenantId, txDirection, pageable);
-            } else {
-                transactionPage = transactionRepository.findByTenantIdOrderByDateDescIdDesc(tenantId, pageable);
-            }
-        }
+        // Manual pagination
+        int start = (int) pageable.getOffset();
+        int end = Math.min((start + pageable.getPageSize()), allFiltered.size());
         
-        return transactionPage.map(this::toDto);
+        List<TransactionDto> pageContent = start >= allFiltered.size() ? 
+                java.util.Collections.emptyList() : 
+                allFiltered.subList(start, end);
+        
+        return new org.springframework.data.domain.PageImpl<>(pageContent, pageable, allFiltered.size());
+    }
+    
+    // Legacy method for backwards compatibility
+    public Page<TransactionDto> getTransactionsPaginated(Long tenantId, int page, int size, String type, String direction, Long memberId) {
+        return getTransactionsPaginated(tenantId, page, size, type, direction, memberId, null, null);
     }
 
     public List<TransactionDto> getTransactionsByDateRange(Long tenantId, LocalDate startDate, LocalDate endDate) {
         return transactionRepository.findByTenantIdAndDateBetween(tenantId, startDate, endDate).stream()
+                .map(this::toDto)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Get transactions with all filters applied (for PDF report generation).
+     */
+    public List<TransactionDto> getTransactionsFiltered(Long tenantId, LocalDate startDate, LocalDate endDate,
+                                                         String type, String direction, Long memberId) {
+        List<Transaction> allTransactions;
+        
+        // Start with date range or all
+        if (startDate != null && endDate != null) {
+            allTransactions = transactionRepository.findByTenantIdAndDateBetween(tenantId, startDate, endDate);
+        } else if (startDate != null) {
+            allTransactions = transactionRepository.findByTenantIdAndDateGreaterThanEqual(tenantId, startDate);
+        } else if (endDate != null) {
+            allTransactions = transactionRepository.findByTenantIdAndDateLessThanEqual(tenantId, endDate);
+        } else {
+            allTransactions = transactionRepository.findByTenantIdOrderByDateDescIdDesc(tenantId);
+        }
+        
+        // Apply filters in memory (could be optimized with dynamic queries if needed)
+        return allTransactions.stream()
+                .filter(t -> type == null || type.isEmpty() || t.getType().name().equals(type))
+                .filter(t -> direction == null || direction.isEmpty() || t.getDirection().name().equals(direction))
+                .filter(t -> memberId == null || (t.getMember() != null && t.getMember().getId().equals(memberId)))
                 .map(this::toDto)
                 .collect(Collectors.toList());
     }

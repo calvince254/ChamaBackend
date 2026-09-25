@@ -1043,24 +1043,9 @@ public class UnifiedPaymentService {
         round.setCollectedAmount(currentCollected.add(claim.getAmount()));
         mgrRoundRepository.save(round);
 
-        // Create GL transaction
-        String description = String.format("MGR Contribution - %s (Round %d, %s, Ref: %s)",
-                contribution.getMember().getName(),
-                round.getPosition(),
-                contribution.getCycle().getName(),
-                claim.getReferenceCode());
-        Transaction transaction = Transaction.builder()
-                .tenant(payable.getTenant())
-                .date(LocalDate.now())
-                .type(Transaction.TransactionType.MERRY_GO_ROUND)
-                .description(description)
-                .amount(claim.getAmount())
-                .direction(Transaction.TransactionDirection.IN)
-                .member(contribution.getMember())
-                .referenceId(contribution.getId())
-                .referenceType("MGR_CONTRIBUTION")
-                .build();
-        transactionRepository.save(transaction);
+        // NOTE: MGR contributions are NOT recorded in the finance book
+        // because MGR is a revolving fund where money goes back to members.
+        // Only MGR fines are recorded as they represent actual income to the chama.
 
         log.info("MGR Contribution {} payment confirmed", mgrContributionId);
     }
@@ -1079,7 +1064,7 @@ public class UnifiedPaymentService {
         fine.setPaidDate(LocalDate.now());
         mgrFineRepository.save(fine);
 
-        // Create GL transaction
+        // Create GL transaction - MGR fines ARE recorded as FINE type
         String description = String.format("MGR Fine Payment - %s (%s, Ref: %s)",
                 fine.getMember().getName(),
                 fine.getReason(),
@@ -1087,7 +1072,7 @@ public class UnifiedPaymentService {
         Transaction transaction = Transaction.builder()
                 .tenant(payable.getTenant())
                 .date(LocalDate.now())
-                .type(Transaction.TransactionType.MERRY_GO_ROUND)
+                .type(Transaction.TransactionType.FINE)
                 .description(description)
                 .amount(claim.getAmount())
                 .direction(Transaction.TransactionDirection.IN)

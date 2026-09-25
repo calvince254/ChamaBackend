@@ -66,6 +66,17 @@ public class WelfareController {
         return ResponseEntity.ok(welfareService.getEventContributions(id, principal.getTenantId()));
     }
 
+    @GetMapping("/{id}/contributions/paginated")
+    public ResponseEntity<PageResponse<WelfareContributionDto>> getEventContributionsPaginated(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        Page<WelfareContributionDto> result = welfareService.getEventContributionsPaginated(
+                id, principal.getTenantId(), page, size);
+        return ResponseEntity.ok(PageResponse.from(result));
+    }
+
     @PutMapping("/{eventId}/contributions/{memberId}")
     public ResponseEntity<WelfareContributionDto> updateContributionPayment(
             @PathVariable Long eventId,

@@ -18,6 +18,7 @@ public class PlatformSettingsService {
     private static final String CONTACT_PHONE_KEY = "contact_phone";
     private static final String CONTACT_EMAIL_KEY = "contact_email";
     private static final String CONTACT_NAME_KEY = "contact_name";
+    private static final String OFFICIAL_WEBSITE_KEY = "official_website";
     
     @Transactional(readOnly = true)
     public PlatformSettingsDto getContactInfo() {
@@ -25,6 +26,7 @@ public class PlatformSettingsService {
                 .contactPhone(getSetting(CONTACT_PHONE_KEY, null))
                 .contactEmail(getSetting(CONTACT_EMAIL_KEY, null))
                 .contactName(getSetting(CONTACT_NAME_KEY, null))
+                .officialWebsite(getSetting(OFFICIAL_WEBSITE_KEY, null))
                 .build();
     }
     
@@ -38,6 +40,9 @@ public class PlatformSettingsService {
         }
         if (dto.getContactName() != null) {
             saveSetting(CONTACT_NAME_KEY, dto.getContactName(), "Contact name for new chama onboarding", updatedBy);
+        }
+        if (dto.getOfficialWebsite() != null) {
+            saveSetting(OFFICIAL_WEBSITE_KEY, dto.getOfficialWebsite(), "Official website URL", updatedBy);
         }
         
         log.info("Platform contact info updated by {}", updatedBy);

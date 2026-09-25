@@ -36,6 +36,7 @@ public class MerryGoRoundService {
     private final TenantRepository tenantRepository;
     private final PayableRepository payableRepository;
     private final PaymentClaimRepository paymentClaimRepository;
+    private final TransactionRepository transactionRepository;
 
     // ==================== CYCLES ====================
 
@@ -783,7 +784,24 @@ public class MerryGoRoundService {
         payable.setStatus(PayableStatus.PAID);
         payableRepository.save(payable);
 
-        log.info("Admin recorded payment for MGR fine {}, amount: {}", fineId, amount);
+        // Create finance transaction for MGR fine payment
+        BigDecimal transactionAmount = amount != null ? amount : fineAmount;
+        String description = String.format("MGR Fine Payment - %s (%s)",
+                fineMember.getName(), fineReason);
+        Transaction transaction = Transaction.builder()
+                .tenant(fineTenant)
+                .date(LocalDate.now())
+                .type(Transaction.TransactionType.FINE)
+                .description(description)
+                .amount(transactionAmount)
+                .direction(Transaction.TransactionDirection.IN)
+                .member(fineMember)
+                .referenceId(fineId)
+                .referenceType("MGR_FINE")
+                .build();
+        transactionRepository.save(transaction);
+
+        log.info("Admin recorded payment for MGR fine {}, amount: {}", fineId, transactionAmount);
 
         return toFineDto(fine);
     }

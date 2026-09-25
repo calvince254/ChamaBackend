@@ -112,6 +112,7 @@ public class HttpConfigurer {
             .requestMatchers("POST", "/api/welfare/{id}/contributions/**").hasAnyAuthority("FULL_ACCESS", "MANAGE_WELFARE_CONTRIBUTIONS")
             
             // ==================== FINANCE ====================
+            .requestMatchers("GET", "/api/finance/report/pdf").hasAnyAuthority("FULL_ACCESS", "DOWNLOAD_FINANCE_REPORT")
             .requestMatchers("GET", "/api/finance/**").hasAnyAuthority("FULL_ACCESS", "VIEW_FINANCE_SUMMARY")
             .requestMatchers("GET", "/api/finance/transactions/**").hasAnyAuthority("FULL_ACCESS", "VIEW_TRANSACTIONS")
             .requestMatchers("POST", "/api/finance/transactions").hasAnyAuthority("FULL_ACCESS", "RECORD_TRANSACTION")
@@ -119,12 +120,13 @@ public class HttpConfigurer {
             .requestMatchers("DELETE", "/api/finance/transactions/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_TRANSACTION")
             
             // ==================== SHARES ====================
+            .requestMatchers("GET", "/api/shares/members/paginated").hasAnyAuthority("FULL_ACCESS", "VIEW_SHARES")
+            .requestMatchers("GET", "/api/shares/settings").hasAnyAuthority("FULL_ACCESS", "VIEW_SHARE_SETTINGS")
+            .requestMatchers("PUT", "/api/shares/settings").hasAnyAuthority("FULL_ACCESS", "MANAGE_SHARE_SETTINGS")
             .requestMatchers("GET", "/api/shares/**").hasAnyAuthority("FULL_ACCESS", "VIEW_SHARES")
             .requestMatchers("POST", "/api/shares").hasAnyAuthority("FULL_ACCESS", "RECORD_SHARE_PURCHASE")
             .requestMatchers("PUT", "/api/shares/{id}").hasAnyAuthority("FULL_ACCESS", "EDIT_SHARE_ENTRY")
             .requestMatchers("DELETE", "/api/shares/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_SHARE_ENTRY")
-            .requestMatchers("GET", "/api/shares/settings").hasAnyAuthority("FULL_ACCESS", "VIEW_SHARE_SETTINGS")
-            .requestMatchers("PUT", "/api/shares/settings").hasAnyAuthority("FULL_ACCESS", "MANAGE_SHARE_SETTINGS")
             
             // ==================== PAYOUTS ====================
             .requestMatchers("GET", "/api/payouts/liquidity").hasAnyAuthority("FULL_ACCESS", "VIEW_PAYOUTS")
@@ -426,6 +428,7 @@ public class HttpConfigurer {
         permissions.put("Finance", java.util.List.of(
             new PermissionDefinition("VIEW_FINANCE_SUMMARY", "View Finance Summary"),
             new PermissionDefinition("VIEW_TRANSACTIONS", "View Transactions"),
+            new PermissionDefinition("DOWNLOAD_FINANCE_REPORT", "Download Finance Report"),
             new PermissionDefinition("RECORD_TRANSACTION", "Record Transaction"),
             new PermissionDefinition("EDIT_TRANSACTION", "Edit Transaction"),
             new PermissionDefinition("DELETE_TRANSACTION", "Delete Transaction")
