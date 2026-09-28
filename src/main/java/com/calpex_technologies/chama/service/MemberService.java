@@ -636,4 +636,28 @@ public class MemberService {
                 .arrearsMonths(member.getArrearsMonths())
                 .build();
     }
+    
+    /**
+     * Search members by name or memberNo (lightweight for typeahead/autocomplete).
+     * Returns only id, name, and memberNo.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> searchMembersLightweight(Long tenantId, String query, int limit) {
+        if (query == null || query.trim().isEmpty()) {
+            return List.of();
+        }
+        
+        Pageable pageable = PageRequest.of(0, limit, Sort.by("name").ascending());
+        Page<Member> members = memberRepository.findByTenantIdWithRoleAndSearch(tenantId, query.trim(), pageable);
+        
+        return members.getContent().stream()
+                .map(m -> {
+                    Map<String, Object> result = new java.util.HashMap<>();
+                    result.put("id", m.getId());
+                    result.put("name", m.getName());
+                    result.put("memberNo", m.getMemberNo());
+                    return result;
+                })
+                .collect(java.util.stream.Collectors.toList());
+    }
 }

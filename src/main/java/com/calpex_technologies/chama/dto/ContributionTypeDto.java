@@ -15,6 +15,7 @@ public class ContributionTypeDto {
     private Long id;
     private String name;
     private String description;
+    private String category; // NORMAL, WELFARE, EMERGENCY, OTHER
     private BigDecimal amount;
     private String frequency; // WEEKLY, MONTHLY, QUARTERLY, YEARLY
     private Integer dueDay;

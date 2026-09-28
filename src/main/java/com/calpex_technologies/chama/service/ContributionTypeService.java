@@ -53,6 +53,7 @@ public class ContributionTypeService {
                 .tenant(tenant)
                 .name(dto.getName())
                 .description(dto.getDescription())
+                .category(dto.getCategory() != null ? ContributionType.Category.valueOf(dto.getCategory()) : ContributionType.Category.NORMAL)
                 .amount(dto.getAmount())
                 .frequency(ContributionType.Frequency.valueOf(dto.getFrequency()))
                 .dueDay(dto.getDueDay())
@@ -79,6 +80,7 @@ public class ContributionTypeService {
 
         ct.setName(dto.getName());
         ct.setDescription(dto.getDescription());
+        ct.setCategory(dto.getCategory() != null ? ContributionType.Category.valueOf(dto.getCategory()) : ContributionType.Category.NORMAL);
         ct.setAmount(dto.getAmount());
         ct.setFrequency(ContributionType.Frequency.valueOf(dto.getFrequency()));
         ct.setDueDay(dto.getDueDay());
@@ -105,6 +107,7 @@ public class ContributionTypeService {
                 .id(ct.getId())
                 .name(ct.getName())
                 .description(ct.getDescription())
+                .category(ct.getCategory() != null ? ct.getCategory().name() : "NORMAL")
                 .amount(ct.getAmount())
                 .frequency(ct.getFrequency().name())
                 .dueDay(ct.getDueDay())

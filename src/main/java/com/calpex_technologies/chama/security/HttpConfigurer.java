@@ -44,6 +44,8 @@ public class HttpConfigurer {
             .requestMatchers("POST", "/api/members/reset-password").hasAnyAuthority("FULL_ACCESS", "RESET_PASSWORD")
             
             // ==================== CONTRIBUTIONS ====================
+            .requestMatchers("GET", "/api/contributions/reports").hasAnyAuthority("FULL_ACCESS", "VIEW_CONTRIBUTION_REPORTS")
+            .requestMatchers("GET", "/api/contributions/reports/pdf").hasAnyAuthority("FULL_ACCESS", "DOWNLOAD_CONTRIBUTION_REPORT")
             .requestMatchers("GET", "/api/contributions/**").hasAnyAuthority("FULL_ACCESS", "VIEW_CONTRIBUTIONS")
             .requestMatchers("POST", "/api/contributions").hasAnyAuthority("FULL_ACCESS", "RECORD_CONTRIBUTION")
             .requestMatchers("POST", "/api/contributions/bulk").hasAnyAuthority("FULL_ACCESS", "BULK_RECORD_CONTRIBUTIONS")
@@ -375,7 +377,9 @@ public class HttpConfigurer {
             new PermissionDefinition("WAIVE_PENALTY", "Waive Penalty"),
             new PermissionDefinition("VIEW_CONTRIBUTION_TOPUPS", "View Top-Up Requests"),
             new PermissionDefinition("REQUEST_CONTRIBUTION_TOPUP", "Request Contribution Top-Up"),
-            new PermissionDefinition("APPROVE_CONTRIBUTION_TOPUP", "Approve/Reject Top-Up Requests")
+            new PermissionDefinition("APPROVE_CONTRIBUTION_TOPUP", "Approve/Reject Top-Up Requests"),
+            new PermissionDefinition("VIEW_CONTRIBUTION_REPORTS", "View Contribution Reports"),
+            new PermissionDefinition("DOWNLOAD_CONTRIBUTION_REPORT", "Download Contribution Report PDF")
         ));
         
         // Loans

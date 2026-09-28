@@ -127,4 +127,19 @@ public class MemberController {
         memberService.resetPassword(request.getMemberId(), request.getNewPassword(), principal.getTenantId());
         return ResponseEntity.ok(Map.of("message", "Password reset successfully. Member will be required to change password on next login."));
     }
+    
+    /**
+     * Search members by name (lightweight for typeahead/autocomplete).
+     * Returns id, name, and memberNo only.
+     */
+    @GetMapping("/search")
+    public ResponseEntity<List<Map<String, Object>>> searchMembers(
+            @RequestParam String query,
+            @RequestParam(defaultValue = "10") int limit,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        log.info("GET /api/members/search - query={}, limit={}", query, limit);
+        List<Map<String, Object>> results = memberService.searchMembersLightweight(
+                principal.getTenantId(), query, limit);
+        return ResponseEntity.ok(results);
+    }
 }

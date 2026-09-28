@@ -34,6 +34,7 @@ public class DatabaseMigration implements ApplicationRunner {
         addFirstLoginColumn();
         createPasswordHistoryTable();
         fixAuditLogMemberForeignKey();
+        addContributionTypeCategoryColumn();
     }
 
     /**
@@ -444,6 +445,39 @@ public class DatabaseMigration implements ApplicationRunner {
             }
         } catch (Exception e) {
             log.warn("Could not fix audit_logs.member_id foreign key: {}. This may be expected on first run.", e.getMessage());
+        }
+    }
+
+    /**
+     * Add category column to contribution_types table.
+     * Categories: NORMAL, WELFARE, EMERGENCY, OTHER
+     */
+    private void addContributionTypeCategoryColumn() {
+        try {
+            // Check if the contribution_types table exists
+            String checkTable = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'contribution_types'";
+            Integer tableExists = jdbcTemplate.queryForObject(checkTable, Integer.class);
+            
+            if (tableExists == null || tableExists == 0) {
+                log.info("Contribution_types table doesn't exist yet, skipping migration");
+                return;
+            }
+
+            // Check if the column already exists
+            String checkColumn = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'contribution_types' AND column_name = 'category'";
+            Integer columnExists = jdbcTemplate.queryForObject(checkColumn, Integer.class);
+            
+            if (columnExists == null || columnExists == 0) {
+                log.info("Adding category column to contribution_types table...");
+                jdbcTemplate.execute("ALTER TABLE contribution_types ADD COLUMN category VARCHAR(20) DEFAULT 'NORMAL'");
+                // Set default for existing rows
+                jdbcTemplate.update("UPDATE contribution_types SET category = 'NORMAL' WHERE category IS NULL");
+                log.info("Successfully added category column to contribution_types table");
+            } else {
+                log.debug("category column already exists in contribution_types, no migration needed");
+            }
+        } catch (Exception e) {
+            log.warn("Could not add category column to contribution_types: {}. This may be expected on first run.", e.getMessage());
         }
     }
 }

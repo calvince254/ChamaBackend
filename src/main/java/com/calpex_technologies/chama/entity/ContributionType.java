@@ -26,6 +26,11 @@ public class ContributionType {
     
     private String description;
     
+    @Enumerated(EnumType.STRING)
+    @Column(name = "category", length = 20)
+    @Builder.Default
+    private Category category = Category.NORMAL; // NORMAL, WELFARE, EMERGENCY, OTHER
+    
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal amount; // Amount due per period
     
@@ -74,5 +79,12 @@ public class ContributionType {
         MONTHLY,
         QUARTERLY,
         YEARLY
+    }
+    
+    public enum Category {
+        NORMAL,
+        WELFARE,
+        EMERGENCY,
+        OTHER
     }
 }

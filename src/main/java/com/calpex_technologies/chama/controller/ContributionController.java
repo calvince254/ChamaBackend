@@ -6,12 +6,17 @@ import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.RecordPaymentRequest;
 import com.calpex_technologies.chama.scheduler.ContributionScheduler;
 import com.calpex_technologies.chama.security.UserPrincipal;
+import com.calpex_technologies.chama.service.ContributionReportPdfService;
 import com.calpex_technologies.chama.service.ContributionService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.HashMap;
 import java.util.List;
@@ -24,6 +29,71 @@ public class ContributionController {
 
     private final ContributionService contributionService;
     private final ContributionScheduler contributionScheduler;
+    private final ContributionReportPdfService contributionReportPdfService;
+
+    // ==================== REPORT ENDPOINTS ====================
+    
+    /**
+     * Get contribution report with filters and pagination.
+     * Filters: startDate, endDate, memberId, contributionTypeId
+     */
+    @GetMapping("/reports")
+    @PreAuthorize("hasAnyAuthority('FULL_ACCESS', 'VIEW_CONTRIBUTION_REPORTS')")
+    public ResponseEntity<PageResponse<ContributionDto>> getContributionReport(
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) Long memberId,
+            @RequestParam(required = false) Long contributionTypeId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        
+        LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
+        LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
+        
+        PageResponse<ContributionDto> response = contributionService.getContributionReport(
+                principal.getTenantId(), start, end, memberId, contributionTypeId, page, size);
+        return ResponseEntity.ok(response);
+    }
+    
+    /**
+     * Download contribution report as PDF.
+     */
+    @GetMapping("/reports/pdf")
+    @PreAuthorize("hasAnyAuthority('FULL_ACCESS', 'DOWNLOAD_CONTRIBUTION_REPORT')")
+    public ResponseEntity<byte[]> downloadContributionReport(
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) Long memberId,
+            @RequestParam(required = false) Long contributionTypeId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        
+        LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
+        LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
+        
+        byte[] pdfContent = contributionReportPdfService.generateContributionReportPdf(
+                principal.getTenantId(), start, end, memberId, contributionTypeId);
+        
+        // Generate filename
+        String filename = "Contribution_Report";
+        if (start != null && end != null) {
+            filename += "_" + start + "_to_" + end;
+        } else if (start != null) {
+            filename += "_from_" + start;
+        } else if (end != null) {
+            filename += "_until_" + end;
+        }
+        filename += ".pdf";
+        
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .body(pdfContent);
+    }
+
+    // ==================== EXISTING ENDPOINTS ====================
+
+    // ==================== EXISTING ENDPOINTS ====================
 
     @GetMapping
     public ResponseEntity<List<ContributionDto>> getAllContributions(

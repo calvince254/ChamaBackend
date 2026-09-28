@@ -581,4 +581,57 @@ public class ContributionService {
                 })
                 .collect(Collectors.toList());
     }
+    
+    // ==================== REPORT METHODS ====================
+    
+    /**
+     * Get contribution report with filters and pagination.
+     */
+    public PageResponse<ContributionDto> getContributionReport(
+            Long tenantId, LocalDate startDate, LocalDate endDate, 
+            Long memberId, Long contributionTypeId, int page, int size) {
+        
+        if (size <= 0) size = DEFAULT_PAGE_SIZE;
+        Pageable pageable = PageRequest.of(page, size, Sort.by("dueDate").descending().and(Sort.by("member.name").ascending()));
+        
+        Page<Contribution> contributionPage = contributionRepository.findForReport(
+                tenantId, startDate, endDate, memberId, contributionTypeId, pageable);
+        
+        Page<ContributionDto> dtoPage = contributionPage.map(this::toReportDto);
+        return PageResponse.from(dtoPage);
+    }
+    
+    /**
+     * Get all contributions for report PDF (no pagination).
+     */
+    public List<ContributionDto> getAllForReport(
+            Long tenantId, LocalDate startDate, LocalDate endDate, 
+            Long memberId, Long contributionTypeId) {
+        
+        List<Contribution> contributions = contributionRepository.findAllForReport(
+                tenantId, startDate, endDate, memberId, contributionTypeId);
+        
+        return contributions.stream().map(this::toReportDto).collect(Collectors.toList());
+    }
+    
+    private ContributionDto toReportDto(Contribution contribution) {
+        ContributionDto.ContributionDtoBuilder builder = ContributionDto.builder()
+                .id(contribution.getId())
+                .memberId(contribution.getMember().getId())
+                .memberName(contribution.getMember().getName())
+                .memberNo(contribution.getMember().getMemberNo())
+                .month(contribution.getMonth().toString())
+                .amountDue(contribution.getAmountDue())
+                .amountPaid(contribution.getAmountPaid())
+                .status(contribution.getStatus().name())
+                .paidOn(contribution.getPaidOn() != null ? contribution.getPaidOn().toString() : null)
+                .dueDate(contribution.getDueDate() != null ? contribution.getDueDate().toString() : null);
+
+        if (contribution.getContributionType() != null) {
+            builder.contributionTypeId(contribution.getContributionType().getId())
+                   .contributionTypeName(contribution.getContributionType().getName());
+        }
+
+        return builder.build();
+    }
 }

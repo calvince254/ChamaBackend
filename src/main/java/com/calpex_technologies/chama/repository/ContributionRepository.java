@@ -105,4 +105,32 @@ public interface ContributionRepository extends JpaRepository<Contribution, Long
     
     // For welfare payment from contribution fund
     List<Contribution> findByMemberIdAndContributionTypeIdAndTenantId(Long memberId, Long contributionTypeId, Long tenantId);
+    
+    // Report queries with date range
+    @Query("SELECT c FROM Contribution c WHERE c.tenant.id = :tenantId " +
+           "AND (:startDate IS NULL OR c.dueDate >= :startDate) " +
+           "AND (:endDate IS NULL OR c.dueDate <= :endDate) " +
+           "AND (:memberId IS NULL OR c.member.id = :memberId) " +
+           "AND (:contributionTypeId IS NULL OR c.contributionType.id = :contributionTypeId) " +
+           "ORDER BY c.dueDate DESC, c.member.name ASC")
+    Page<Contribution> findForReport(
+            @Param("tenantId") Long tenantId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate,
+            @Param("memberId") Long memberId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            Pageable pageable);
+    
+    @Query("SELECT c FROM Contribution c WHERE c.tenant.id = :tenantId " +
+           "AND (:startDate IS NULL OR c.dueDate >= :startDate) " +
+           "AND (:endDate IS NULL OR c.dueDate <= :endDate) " +
+           "AND (:memberId IS NULL OR c.member.id = :memberId) " +
+           "AND (:contributionTypeId IS NULL OR c.contributionType.id = :contributionTypeId) " +
+           "ORDER BY c.dueDate DESC, c.member.name ASC")
+    List<Contribution> findAllForReport(
+            @Param("tenantId") Long tenantId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate,
+            @Param("memberId") Long memberId,
+            @Param("contributionTypeId") Long contributionTypeId);
 }
