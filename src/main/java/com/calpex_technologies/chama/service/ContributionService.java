@@ -1,6 +1,7 @@
 package com.calpex_technologies.chama.service;
 
 import com.calpex_technologies.chama.dto.ContributionDto;
+import com.calpex_technologies.chama.dto.ContributionTransactionDto;
 import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.entity.*;
 import com.calpex_technologies.chama.repository.*;
@@ -35,6 +36,7 @@ public class ContributionService {
     private final ContributionTypeRepository contributionTypeRepository;
     private final PayableRepository payableRepository;
     private final PaymentClaimRepository paymentClaimRepository;
+    private final WelfareContributionRepository welfareContributionRepository;
     
     private static final int DEFAULT_PAGE_SIZE = 10;
 
@@ -493,6 +495,7 @@ public class ContributionService {
                 .member(contribution.getMember())
                 .referenceId(contribution.getId())
                 .referenceType("CONTRIBUTION")
+                .contributionType(contribution.getContributionType())  // Link to contribution type for balance calculation
                 .tenant(tenant)
                 .build();
         transactionRepository.save(transaction);
@@ -631,7 +634,189 @@ public class ContributionService {
             builder.contributionTypeId(contribution.getContributionType().getId())
                    .contributionTypeName(contribution.getContributionType().getName());
         }
+        
+        // Get welfare deductions for this member from this contribution type
+        // Note: Welfare deductions are from the total balance in a contribution type, not from specific records
+        Long memberId = contribution.getMember().getId();
+        Long contribTypeId = contribution.getContributionType() != null ? contribution.getContributionType().getId() : null;
+        Long tenantId = contribution.getTenant().getId();
+        
+        log.info("=== WELFARE DEDUCTIONS LOOKUP for contribution report ===");
+        log.info("Member: id={}, name={}", memberId, contribution.getMember().getName());
+        log.info("ContributionType: id={}, name={}", contribTypeId, 
+                contribution.getContributionType() != null ? contribution.getContributionType().getName() : "null");
+        log.info("TenantId: {}", tenantId);
+        
+        List<WelfareContribution> welfareDeductions = new ArrayList<>();
+        if (contribTypeId != null) {
+            welfareDeductions = welfareContributionRepository
+                    .findByMemberIdAndSourceContributionTypeIdAndTenantId(memberId, contribTypeId, tenantId);
+            log.info("Found {} welfare deductions for this member/contribution type", welfareDeductions.size());
+            for (WelfareContribution wc : welfareDeductions) {
+                log.info("  - WelfareContribution id={}, eventId={}, amountFromFund={}, sourceContribTypeId={}", 
+                        wc.getId(), wc.getWelfareEvent().getId(), wc.getAmountFromFund(),
+                        wc.getSourceContributionType() != null ? wc.getSourceContributionType().getId() : "null");
+            }
+        } else {
+            log.info("ContributionType is null, skipping welfare deductions lookup");
+        }
+        
+        if (!welfareDeductions.isEmpty()) {
+            BigDecimal totalDeductions = BigDecimal.ZERO;
+            List<ContributionDto.WelfareDeductionDto> deductionDtos = new ArrayList<>();
+            
+            for (WelfareContribution wc : welfareDeductions) {
+                BigDecimal deductionAmount = wc.getAmountFromFund() != null ? wc.getAmountFromFund() : BigDecimal.ZERO;
+                totalDeductions = totalDeductions.add(deductionAmount);
+                
+                deductionDtos.add(ContributionDto.WelfareDeductionDto.builder()
+                        .welfareEventId(wc.getWelfareEvent().getId())
+                        .welfareEventType(wc.getWelfareEvent().getEventType().name())
+                        .beneficiaryName(wc.getWelfareEvent().getMember().getName())
+                        .amount(deductionAmount)
+                        .date(wc.getPaidDate() != null ? wc.getPaidDate().toLocalDate().toString() : null)
+                        .build());
+            }
+            
+            builder.totalWelfareDeductions(totalDeductions)
+                   .welfareDeductions(deductionDtos);
+        }
 
+        return builder.build();
+    }
+    
+    /**
+     * Get contribution report summary totals.
+     * Uses native SQL aggregate query for fast performance.
+     */
+    public java.util.Map<String, Object> getContributionReportSummary(
+            Long tenantId, LocalDate startDate, LocalDate endDate,
+            Long memberId, Long contributionTypeId) {
+        
+        Object[] result = contributionRepository.findReportSummaryNative(
+                tenantId, startDate, endDate, memberId, contributionTypeId);
+        
+        java.math.BigDecimal totalDue = java.math.BigDecimal.ZERO;
+        java.math.BigDecimal totalPaid = java.math.BigDecimal.ZERO;
+        long count = 0;
+        
+        if (result != null && result.length > 0 && result[0] != null) {
+            Object[] row = (result[0] instanceof Object[]) ? (Object[]) result[0] : result;
+            if (row.length >= 3) {
+                if (row[0] != null) {
+                    totalDue = new java.math.BigDecimal(row[0].toString());
+                }
+                if (row[1] != null) {
+                    totalPaid = new java.math.BigDecimal(row[1].toString());
+                }
+                if (row[2] != null) {
+                    count = ((Number) row[2]).longValue();
+                }
+            }
+        }
+        
+        java.util.Map<String, Object> summary = new java.util.HashMap<>();
+        summary.put("totalDue", totalDue);
+        summary.put("totalPaid", totalPaid);
+        summary.put("balance", totalDue.subtract(totalPaid));
+        summary.put("count", count);
+        
+        return summary;
+    }
+    
+    // ==================== TRANSACTION-BASED REPORT METHODS ====================
+    
+    /**
+     * Get contribution transactions report with pagination.
+     * Shows both credits (contributions paid) and debits (welfare deductions) as separate rows.
+     * Supports optional contributionTypeId - if null, returns transactions for all contribution types.
+     */
+    public PageResponse<ContributionTransactionDto> getContributionTransactionsReport(
+            Long tenantId, Long contributionTypeId, Long memberId,
+            LocalDate startDate, LocalDate endDate, int page, int size) {
+        
+        if (size <= 0) size = DEFAULT_PAGE_SIZE;
+        Pageable pageable = PageRequest.of(page, size);
+        
+        Page<Transaction> transactionPage = transactionRepository.findContributionTransactions(
+                tenantId, contributionTypeId, memberId, startDate, endDate, pageable);
+        
+        Page<ContributionTransactionDto> dtoPage = transactionPage.map(this::toTransactionDto);
+        return PageResponse.from(dtoPage);
+    }
+    
+    /**
+     * Get all contribution transactions for PDF export (no pagination).
+     * Supports optional contributionTypeId - if null, returns transactions for all contribution types.
+     */
+    public List<ContributionTransactionDto> getAllContributionTransactionsForReport(
+            Long tenantId, Long contributionTypeId, Long memberId,
+            LocalDate startDate, LocalDate endDate) {
+        
+        List<Transaction> transactions = transactionRepository.findAllContributionTransactions(
+                tenantId, contributionTypeId, memberId, startDate, endDate);
+        
+        return transactions.stream().map(this::toTransactionDto).collect(Collectors.toList());
+    }
+    
+    /**
+     * Get contribution transactions report summary.
+     * Returns totalCredits, totalDebits, and balance.
+     * Supports optional contributionTypeId - if null, returns summary for all contribution types.
+     */
+    public Map<String, Object> getContributionTransactionsSummary(
+            Long tenantId, Long contributionTypeId, Long memberId,
+            LocalDate startDate, LocalDate endDate) {
+        
+        BigDecimal totalCredits = transactionRepository.sumContributionCredits(
+                tenantId, contributionTypeId, memberId, startDate, endDate);
+        BigDecimal totalDebits = transactionRepository.sumContributionDebits(
+                tenantId, contributionTypeId, memberId, startDate, endDate);
+        Long count = transactionRepository.countContributionTransactions(
+                tenantId, contributionTypeId, memberId, startDate, endDate);
+        
+        BigDecimal balance = totalCredits.subtract(totalDebits);
+        
+        Map<String, Object> summary = new java.util.HashMap<>();
+        summary.put("totalCredits", totalCredits);
+        summary.put("totalDebits", totalDebits);
+        summary.put("balance", balance);
+        summary.put("count", count);
+        
+        return summary;
+    }
+    
+    /**
+     * Convert Transaction entity to ContributionTransactionDto.
+     */
+    private ContributionTransactionDto toTransactionDto(Transaction transaction) {
+        ContributionTransactionDto.ContributionTransactionDtoBuilder builder = ContributionTransactionDto.builder()
+                .id(transaction.getId())
+                .date(transaction.getDate().toString())
+                .amount(transaction.getAmount())
+                .description(transaction.getDescription())
+                .transactionType(transaction.getType().name())
+                .direction(transaction.getDirection() == Transaction.TransactionDirection.IN ? "CREDIT" : "DEBIT")
+                .referenceId(transaction.getReferenceId())
+                .referenceType(transaction.getReferenceType());
+        
+        if (transaction.getMember() != null) {
+            builder.memberId(transaction.getMember().getId())
+                   .memberName(transaction.getMember().getName())
+                   .memberNo(transaction.getMember().getMemberNo());
+        }
+        
+        if (transaction.getContributionType() != null) {
+            builder.contributionTypeId(transaction.getContributionType().getId())
+                   .contributionTypeName(transaction.getContributionType().getName());
+        }
+        
+        // Extract month from reference if it's a contribution
+        if ("CONTRIBUTION".equals(transaction.getReferenceType()) && transaction.getReferenceId() != null) {
+            contributionRepository.findById(transaction.getReferenceId())
+                    .ifPresent(c -> builder.month(c.getMonth().toString()));
+        }
+        
         return builder.build();
     }
 }

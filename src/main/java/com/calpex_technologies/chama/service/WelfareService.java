@@ -114,6 +114,16 @@ public class WelfareService {
                 .tenant(tenant)
                 .build();
 
+        // Set funding contribution types if provided
+        if (dto.getFundingContributionTypeIds() != null && !dto.getFundingContributionTypeIds().isEmpty()) {
+            Set<ContributionType> fundingTypes = dto.getFundingContributionTypeIds().stream()
+                    .map(typeId -> contributionTypeRepository.findByIdAndTenantId(typeId, tenantId)
+                            .orElse(null))
+                    .filter(ct -> ct != null)
+                    .collect(Collectors.toSet());
+            event.setFundingContributionTypes(fundingTypes);
+        }
+
         event = welfareEventRepository.save(event);
 
         // Create contribution records for all involved members
@@ -184,21 +194,15 @@ public class WelfareService {
                 .map(WelfareContribution::getId)
                 .collect(Collectors.toList());
         
-        // Find payables for these contributions to check for pending claims
+        // Find payables for these contributions that are awaiting confirmation
         List<Payable> payables = payableRepository
                 .findByTenant_IdAndPayableTypeAndPayableRefIdInAndStatus(
                         tenantId,
                         PayableType.WELFARE_DUE,
                         contributionIds,
-                        PayableStatus.OUTSTANDING);
-        
-        // Get payable IDs to check for pending claims
-        List<Long> payableIds = payables.stream()
-                .map(Payable::getId)
-                .collect(Collectors.toList());
+                        PayableStatus.AWAITING_CONFIRMATION);
         
         Set<Long> contributionsWithPendingClaims = payables.stream()
-                .filter(p -> payableIds.contains(p.getId()))
                 .map(Payable::getPayableRefId)
                 .collect(Collectors.toSet());
         
@@ -221,16 +225,36 @@ public class WelfareService {
                 .findByWelfareEventIdAndMemberIdAndTenantId(eventId, memberId, tenantId)
                 .orElseThrow(() -> new RuntimeException("Contribution not found"));
 
+        // Check if there's already a fund payment (partial payment from fund)
+        BigDecimal existingFromFund = contribution.getAmountFromFund() != null ? contribution.getAmountFromFund() : BigDecimal.ZERO;
+        
         // Update paid status
         contribution.setPaid(paid);
-        contribution.setPaymentMethod(WelfareContribution.PaymentMethod.CASH);
-        contribution.setPaidFromContribution(false);
+        
         if (paid) {
             contribution.setAmountPaid(contribution.getAmountExpected());
             contribution.setPaidDate(LocalDateTime.now());
+            
+            if (existingFromFund.compareTo(BigDecimal.ZERO) > 0) {
+                // There was a prior fund payment - this is completing the rest via cash (MIXED)
+                BigDecimal cashPortion = contribution.getAmountExpected().subtract(existingFromFund);
+                contribution.setAmountFromCash(cashPortion);
+                contribution.setPaymentMethod(WelfareContribution.PaymentMethod.MIXED);
+                contribution.setPaidFromContribution(true); // Keep true since fund was used
+            } else {
+                // Pure cash payment
+                contribution.setAmountFromCash(contribution.getAmountExpected());
+                contribution.setAmountFromFund(BigDecimal.ZERO);
+                contribution.setPaymentMethod(WelfareContribution.PaymentMethod.CASH);
+                contribution.setPaidFromContribution(false);
+            }
         } else {
             contribution.setAmountPaid(BigDecimal.ZERO);
+            contribution.setAmountFromCash(BigDecimal.ZERO);
+            contribution.setAmountFromFund(BigDecimal.ZERO);
             contribution.setPaidDate(null);
+            contribution.setPaymentMethod(WelfareContribution.PaymentMethod.CASH);
+            contribution.setPaidFromContribution(false);
         }
 
         contribution = welfareContributionRepository.save(contribution);
@@ -245,13 +269,21 @@ public class WelfareService {
      * Pay welfare contribution using funds from a contribution pool
      */
     @Transactional
-    public WelfareContributionDto payFromContributionFund(Long eventId, Long memberId, Long contributionTypeId, Long tenantId) {
+    public WelfareContributionDto payFromContributionFund(Long eventId, Long memberId, Long contributionTypeId, BigDecimal amountFromFund, Long tenantId) {
+        log.info("=== PAY FROM CONTRIBUTION FUND START ===");
+        log.info("Parameters: eventId={}, memberId={}, contributionTypeId={}, amountFromFund={}, tenantId={}", 
+                eventId, memberId, contributionTypeId, amountFromFund, tenantId);
+        
         WelfareEvent event = welfareEventRepository.findByIdAndTenantId(eventId, tenantId)
                 .orElseThrow(() -> new RuntimeException("Welfare event not found"));
+        log.info("Found welfare event: id={}, type={}, beneficiary={}", event.getId(), event.getEventType(), event.getMember().getName());
 
         WelfareContribution welfareContribution = welfareContributionRepository
                 .findByWelfareEventIdAndMemberIdAndTenantId(eventId, memberId, tenantId)
                 .orElseThrow(() -> new RuntimeException("Welfare contribution not found"));
+        log.info("Found welfare contribution: id={}, member={}, amountExpected={}, currentPaid={}", 
+                welfareContribution.getId(), welfareContribution.getMember().getName(), 
+                welfareContribution.getAmountExpected(), welfareContribution.getAmountPaid());
 
         if (welfareContribution.getPaid()) {
             throw new RuntimeException("Welfare contribution is already paid");
@@ -259,61 +291,115 @@ public class WelfareService {
 
         ContributionType contributionType = contributionTypeRepository.findByIdAndTenantId(contributionTypeId, tenantId)
                 .orElseThrow(() -> new RuntimeException("Contribution type not found"));
+        log.info("Found contribution type: id={}, name={}", contributionType.getId(), contributionType.getName());
 
-        // Get member's available balance in this contribution type
+        // Get member's available balance in this contribution type (Total Paid - Previous Welfare Deductions)
         BigDecimal availableBalance = getMemberContributionBalance(memberId, contributionTypeId, tenantId);
+        log.info("Member available balance in {}: {}", contributionType.getName(), availableBalance);
+        
         BigDecimal amountNeeded = welfareContribution.getAmountExpected();
-
-        if (availableBalance.compareTo(amountNeeded) < 0) {
+        
+        // If no specific amount provided, use full amount needed
+        BigDecimal amountToDeduct = amountFromFund != null ? amountFromFund : amountNeeded;
+        log.info("Amount to deduct: {} (requested: {}, needed: {})", amountToDeduct, amountFromFund, amountNeeded);
+        
+        // Validate amount
+        if (amountToDeduct.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Amount must be greater than zero");
+        }
+        if (amountToDeduct.compareTo(amountNeeded) > 0) {
+            throw new RuntimeException("Amount from fund cannot exceed amount due");
+        }
+        if (amountToDeduct.compareTo(availableBalance) > 0) {
             throw new RuntimeException("Insufficient balance in " + contributionType.getName() + 
-                    ". Available: " + availableBalance + ", Required: " + amountNeeded);
+                    ". Available: " + availableBalance + ", Requested: " + amountToDeduct);
         }
 
-        // Find the most recent contribution to deduct from
-        Contribution sourceContribution = findContributionToDeduct(memberId, contributionTypeId, amountNeeded, tenantId);
-        if (sourceContribution == null) {
-            throw new RuntimeException("No contribution record found to deduct from");
-        }
+        // NOTE: We deduct from the TOTAL balance in the contribution type, not from a specific contribution record.
+        // The member may have Jan, Feb, Mar contributions totaling 300. We check that total, then create a debit transaction.
+        // Individual contribution records are NOT modified - they keep their full paid amounts.
+        // Available balance is calculated as: Total Paid - Sum of Welfare Deductions (tracked in welfare_contributions.amount_from_fund)
 
-        // Deduct from the contribution
-        BigDecimal currentPaid = sourceContribution.getAmountPaid() != null 
-                ? sourceContribution.getAmountPaid() : BigDecimal.ZERO;
-        sourceContribution.setAmountPaid(currentPaid.subtract(amountNeeded));
-        updateContributionStatus(sourceContribution);
-        contributionRepository.save(sourceContribution);
-
-        // Mark welfare contribution as paid
-        welfareContribution.setPaid(true);
-        welfareContribution.setAmountPaid(amountNeeded);
-        welfareContribution.setPaidDate(LocalDateTime.now());
+        // Update welfare contribution with partial or full payment
+        BigDecimal previousPaid = welfareContribution.getAmountPaid() != null ? welfareContribution.getAmountPaid() : BigDecimal.ZERO;
+        BigDecimal newTotalPaid = previousPaid.add(amountToDeduct);
+        log.info("Welfare contribution payment: previousPaid={}, newTotalPaid={}", previousPaid, newTotalPaid);
+        
+        // Track amount from fund
+        BigDecimal previousFromFund = welfareContribution.getAmountFromFund() != null ? welfareContribution.getAmountFromFund() : BigDecimal.ZERO;
+        welfareContribution.setAmountFromFund(previousFromFund.add(amountToDeduct));
+        log.info("Amount from fund: previous={}, new={}", previousFromFund, welfareContribution.getAmountFromFund());
+        
+        welfareContribution.setAmountPaid(newTotalPaid);
         welfareContribution.setPaidFromContribution(true);
         welfareContribution.setSourceContributionType(contributionType);
-        welfareContribution.setSourceContribution(sourceContribution);
-        welfareContribution.setPaymentMethod(WelfareContribution.PaymentMethod.CONTRIBUTION_FUND);
+        log.info("Set sourceContributionType: id={}, name={}", contributionType.getId(), contributionType.getName());
+        // Note: sourceContribution is left null since we're deducting from total, not a specific record
+        
+        // Mark as fully paid only if total paid equals expected
+        if (newTotalPaid.compareTo(amountNeeded) >= 0) {
+            welfareContribution.setPaid(true);
+            welfareContribution.setPaidDate(LocalDateTime.now());
+            // Check if it's mixed payment
+            BigDecimal fromCash = welfareContribution.getAmountFromCash() != null ? welfareContribution.getAmountFromCash() : BigDecimal.ZERO;
+            if (fromCash.compareTo(BigDecimal.ZERO) > 0) {
+                welfareContribution.setPaymentMethod(WelfareContribution.PaymentMethod.MIXED);
+                log.info("Payment method set to MIXED (fund: {}, cash: {})", welfareContribution.getAmountFromFund(), fromCash);
+            } else {
+                welfareContribution.setPaymentMethod(WelfareContribution.PaymentMethod.CONTRIBUTION_FUND);
+                log.info("Payment method set to CONTRIBUTION_FUND");
+            }
+        }
+        
         welfareContribution = welfareContributionRepository.save(welfareContribution);
+        log.info("Saved welfare contribution: id={}, paid={}, paymentMethod={}", 
+                welfareContribution.getId(), welfareContribution.getPaid(), welfareContribution.getPaymentMethod());
 
         // Recalculate welfare event totals
         recalculateTotalCollected(event, tenantId);
 
-        // Create transaction records
-        createWelfareFromContributionTransactions(welfareContribution, sourceContribution, event);
+        // Create debit transaction showing the fund usage
+        log.info("Creating debit transaction...");
+        createWelfareDebitTransaction(welfareContribution, contributionType, event, amountToDeduct);
 
-        log.info("Welfare payment from contribution fund: member={}, event={}, amount={}, source={}",
-                welfareContribution.getMember().getName(), event.getId(), amountNeeded, contributionType.getName());
+        log.info("=== PAY FROM CONTRIBUTION FUND COMPLETE ===");
+        log.info("Welfare payment from contribution fund: member={}, event={}, amount={}, source={}, fullPayment={}",
+                welfareContribution.getMember().getName(), event.getId(), amountToDeduct, contributionType.getName(), welfareContribution.getPaid());
 
         return toContributionDto(welfareContribution);
     }
+    
+    /**
+     * Legacy method for full payment (backward compatibility)
+     */
+    @Transactional
+    public WelfareContributionDto payFromContributionFund(Long eventId, Long memberId, Long contributionTypeId, Long tenantId) {
+        return payFromContributionFund(eventId, memberId, contributionTypeId, null, tenantId);
+    }
 
     /**
-     * Get member's total paid balance in a contribution type
+     * Get member's available balance in a contribution type.
+     * Balance = Sum of Credits (IN) - Sum of Debits (OUT) for that contribution type.
+     * This includes all contribution payments minus any welfare deductions.
      */
     public BigDecimal getMemberContributionBalance(Long memberId, Long contributionTypeId, Long tenantId) {
-        List<Contribution> contributions = contributionRepository
-                .findByMemberIdAndContributionTypeIdAndTenantId(memberId, contributionTypeId, tenantId);
+        log.info("=== CALCULATING MEMBER BALANCE ===");
+        log.info("memberId={}, contributionTypeId={}, tenantId={}", memberId, contributionTypeId, tenantId);
         
-        return contributions.stream()
-                .map(c -> c.getAmountPaid() != null ? c.getAmountPaid() : BigDecimal.ZERO)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Get total credits (contribution payments IN)
+        BigDecimal totalCredits = transactionRepository
+                .sumCreditsByMemberAndContributionType(memberId, contributionTypeId, tenantId);
+        log.info("Total credits (IN): {}", totalCredits);
+        
+        // Get total debits (welfare deductions OUT)
+        BigDecimal totalDebits = transactionRepository
+                .sumDebitsByMemberAndContributionType(memberId, contributionTypeId, tenantId);
+        log.info("Total debits (OUT): {}", totalDebits);
+        
+        BigDecimal balance = totalCredits.subtract(totalDebits);
+        log.info("Available balance: {} - {} = {}", totalCredits, totalDebits, balance);
+        
+        return balance;
     }
 
     /**
@@ -338,79 +424,45 @@ public class WelfareService {
                 .collect(Collectors.toList());
     }
 
-    private Contribution findContributionToDeduct(Long memberId, Long contributionTypeId, BigDecimal amount, Long tenantId) {
-        // Find contributions with available balance, ordered by month descending (most recent first)
-        List<Contribution> contributions = contributionRepository
-                .findByMemberIdAndContributionTypeIdAndTenantId(memberId, contributionTypeId, tenantId);
-        
-        // Sort by month descending
-        contributions.sort((a, b) -> b.getMonth().compareTo(a.getMonth()));
-        
-        // Find one with sufficient balance
-        for (Contribution c : contributions) {
-            BigDecimal paid = c.getAmountPaid() != null ? c.getAmountPaid() : BigDecimal.ZERO;
-            if (paid.compareTo(amount) >= 0) {
-                return c;
-            }
-        }
-        
-        // If no single contribution has enough, use the one with highest balance
-        return contributions.stream()
-                .filter(c -> c.getAmountPaid() != null && c.getAmountPaid().compareTo(BigDecimal.ZERO) > 0)
-                .findFirst()
-                .orElse(null);
-    }
-
-    private void updateContributionStatus(Contribution contribution) {
-        BigDecimal paid = contribution.getAmountPaid() != null ? contribution.getAmountPaid() : BigDecimal.ZERO;
-        BigDecimal due = contribution.getAmountDue() != null ? contribution.getAmountDue() : BigDecimal.ZERO;
-        
-        if (paid.compareTo(due) >= 0) {
-            contribution.setStatus(Contribution.ContributionStatus.PAID);
-        } else if (paid.compareTo(BigDecimal.ZERO) > 0) {
-            contribution.setStatus(Contribution.ContributionStatus.PARTIAL);
-        } else if (contribution.getDueDate() != null && LocalDate.now().isAfter(contribution.getDueDate())) {
-            contribution.setStatus(Contribution.ContributionStatus.OVERDUE);
-        } else {
-            contribution.setStatus(Contribution.ContributionStatus.PENDING);
-        }
-    }
-
-    private void createWelfareFromContributionTransactions(WelfareContribution welfareContribution, 
-                                                            Contribution sourceContribution, 
-                                                            WelfareEvent event) {
+    /**
+     * Create a debit transaction for welfare payment from contribution fund.
+     * This is the ONLY transaction created - showing money going OUT from the member's contribution pool.
+     */
+    private void createWelfareDebitTransaction(WelfareContribution welfareContribution, 
+                                                ContributionType contributionType, 
+                                                WelfareEvent event,
+                                                BigDecimal amount) {
         Tenant tenant = welfareContribution.getTenant();
         Member member = welfareContribution.getMember();
-        BigDecimal amount = welfareContribution.getAmountPaid();
 
-        // Transaction 1: OUT from contribution pool
+        log.info("=== CREATING WELFARE DEBIT TRANSACTION ===");
+        log.info("Member: id={}, name={}", member.getId(), member.getName());
+        log.info("Contribution Type: id={}, name={}", contributionType.getId(), contributionType.getName());
+        log.info("Amount: {}", amount);
+        log.info("Welfare Event: id={}, type={}, beneficiary={}", event.getId(), event.getEventType(), event.getMember().getName());
+
+        // Create ONE debit (OUT) transaction from the member's contribution fund total
+        // This transaction has contributionType set so balance can be calculated as credits - debits
         Transaction outTransaction = Transaction.builder()
                 .date(LocalDate.now())
                 .type(Transaction.TransactionType.WELFARE)
-                .description("Welfare payment from " + sourceContribution.getContributionType().getName() + 
+                .description("Welfare payment from " + contributionType.getName() + 
                         " for " + event.getEventType() + " - " + event.getMember().getName())
                 .amount(amount)
                 .direction(Transaction.TransactionDirection.OUT)
                 .member(member)
                 .referenceId(welfareContribution.getId())
                 .referenceType("WELFARE_FROM_CONTRIBUTION")
+                .contributionType(contributionType)  // Link to contribution type for balance calculation
                 .tenant(tenant)
                 .build();
-        transactionRepository.save(outTransaction);
-
-        // Transaction 2: IN to welfare fund
-        Transaction inTransaction = Transaction.builder()
-                .date(LocalDate.now())
-                .type(Transaction.TransactionType.WELFARE)
-                .description("Welfare contribution from " + member.getName() + " (from contribution fund)")
-                .amount(amount)
-                .direction(Transaction.TransactionDirection.IN)
-                .member(member)
-                .referenceId(event.getId())
-                .referenceType("WELFARE_EVENT")
-                .tenant(tenant)
-                .build();
-        transactionRepository.save(inTransaction);
+        
+        log.info("Transaction built: type={}, direction={}, amount={}, member={}, contributionType={}", 
+                outTransaction.getType(), outTransaction.getDirection(), outTransaction.getAmount(), 
+                outTransaction.getMember().getName(), outTransaction.getContributionType().getName());
+        
+        Transaction saved = transactionRepository.save(outTransaction);
+        log.info("=== TRANSACTION SAVED: id={} ===", saved.getId());
     }
 
     @Transactional
@@ -455,6 +507,22 @@ public class WelfareService {
         int totalInvolved = contributions.size();
         int paidCount = (int) contributions.stream().filter(WelfareContribution::getPaid).count();
 
+        // Get funding sources
+        List<Long> fundingTypeIds = event.getFundingContributionTypes() != null 
+                ? event.getFundingContributionTypes().stream()
+                        .map(ContributionType::getId)
+                        .collect(Collectors.toList())
+                : List.of();
+        
+        List<WelfareEventDto.FundingSourceDto> fundingSources = event.getFundingContributionTypes() != null
+                ? event.getFundingContributionTypes().stream()
+                        .map(ct -> WelfareEventDto.FundingSourceDto.builder()
+                                .contributionTypeId(ct.getId())
+                                .contributionTypeName(ct.getName())
+                                .build())
+                        .collect(Collectors.toList())
+                : List.of();
+
         return WelfareEventDto.builder()
                 .id(event.getId())
                 .memberId(event.getMember().getId())
@@ -470,6 +538,8 @@ public class WelfareService {
                 .allMembersInvolved(event.getAllMembersInvolved())
                 .totalInvolved(totalInvolved)
                 .paidCount(paidCount)
+                .fundingContributionTypeIds(fundingTypeIds)
+                .fundingSources(fundingSources)
                 .build();
     }
 
@@ -507,6 +577,8 @@ public class WelfareService {
                 .paidDate(contribution.getPaidDate() != null ? contribution.getPaidDate().toString() : null)
                 .paymentReference(contribution.getPaymentReference())
                 .paidFromContribution(contribution.getPaidFromContribution())
+                .amountFromFund(contribution.getAmountFromFund())
+                .amountFromCash(contribution.getAmountFromCash())
                 .paymentMethod(contribution.getPaymentMethod() != null ? contribution.getPaymentMethod().name() : null)
                 .hasPendingClaim(hasPendingClaim)
                 .payableId(payableId);
@@ -560,5 +632,34 @@ public class WelfareService {
         private Long contributionTypeId;
         private String contributionTypeName;
         private BigDecimal balance;
+    }
+    
+    /**
+     * Debug method to check welfare contributions for a member
+     */
+    public List<Map<String, Object>> debugGetMemberWelfareContributions(Long memberId, Long tenantId) {
+        List<WelfareContribution> contributions = welfareContributionRepository.findByMemberId(memberId);
+        
+        return contributions.stream()
+                .map(wc -> {
+                    Map<String, Object> data = new java.util.HashMap<>();
+                    data.put("id", wc.getId());
+                    data.put("welfareEventId", wc.getWelfareEvent().getId());
+                    data.put("memberId", wc.getMember().getId());
+                    data.put("memberName", wc.getMember().getName());
+                    data.put("amountExpected", wc.getAmountExpected());
+                    data.put("amountPaid", wc.getAmountPaid());
+                    data.put("amountFromFund", wc.getAmountFromFund());
+                    data.put("amountFromCash", wc.getAmountFromCash());
+                    data.put("paid", wc.getPaid());
+                    data.put("paidFromContribution", wc.getPaidFromContribution());
+                    data.put("paymentMethod", wc.getPaymentMethod() != null ? wc.getPaymentMethod().name() : null);
+                    data.put("sourceContributionTypeId", wc.getSourceContributionType() != null ? wc.getSourceContributionType().getId() : null);
+                    data.put("sourceContributionTypeName", wc.getSourceContributionType() != null ? wc.getSourceContributionType().getName() : null);
+                    data.put("sourceContributionId", wc.getSourceContribution() != null ? wc.getSourceContribution().getId() : null);
+                    data.put("tenantId", wc.getTenant().getId());
+                    return data;
+                })
+                .collect(Collectors.toList());
     }
 }

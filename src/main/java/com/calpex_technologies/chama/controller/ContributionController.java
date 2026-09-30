@@ -1,6 +1,7 @@
 package com.calpex_technologies.chama.controller;
 
 import com.calpex_technologies.chama.dto.ContributionDto;
+import com.calpex_technologies.chama.dto.ContributionTransactionDto;
 import com.calpex_technologies.chama.dto.GenerateContributionsRequest;
 import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.RecordPaymentRequest;
@@ -57,6 +58,27 @@ public class ContributionController {
     }
     
     /**
+     * Get contribution report summary totals.
+     * Returns totalDue, totalPaid, and balance for the filtered contributions.
+     */
+    @GetMapping("/reports/summary")
+    @PreAuthorize("hasAnyAuthority('FULL_ACCESS', 'VIEW_CONTRIBUTION_REPORTS')")
+    public ResponseEntity<Map<String, Object>> getContributionReportSummary(
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) Long memberId,
+            @RequestParam(required = false) Long contributionTypeId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        
+        LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
+        LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
+        
+        Map<String, Object> summary = contributionService.getContributionReportSummary(
+                principal.getTenantId(), start, end, memberId, contributionTypeId);
+        return ResponseEntity.ok(summary);
+    }
+    
+    /**
      * Download contribution report as PDF.
      */
     @GetMapping("/reports/pdf")
@@ -89,6 +111,54 @@ public class ContributionController {
                 .contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                 .body(pdfContent);
+    }
+    
+    // ==================== TRANSACTION-BASED REPORT ENDPOINTS ====================
+    
+    /**
+     * Get contribution transactions report with pagination.
+     * Shows both credits (contributions paid) and debits (welfare deductions) as separate rows.
+     * Supports optional contributionTypeId for "All Types" filter.
+     */
+    @GetMapping("/reports/transactions")
+    @PreAuthorize("hasAnyAuthority('FULL_ACCESS', 'VIEW_CONTRIBUTION_REPORTS')")
+    public ResponseEntity<PageResponse<ContributionTransactionDto>> getContributionTransactionsReport(
+            @RequestParam(required = false) Long contributionTypeId,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) Long memberId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        
+        LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
+        LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
+        
+        PageResponse<ContributionTransactionDto> response = contributionService.getContributionTransactionsReport(
+                principal.getTenantId(), contributionTypeId, memberId, start, end, page, size);
+        return ResponseEntity.ok(response);
+    }
+    
+    /**
+     * Get contribution transactions report summary.
+     * Returns totalCredits, totalDebits, and balance.
+     * Supports optional contributionTypeId for "All Types" filter.
+     */
+    @GetMapping("/reports/transactions/summary")
+    @PreAuthorize("hasAnyAuthority('FULL_ACCESS', 'VIEW_CONTRIBUTION_REPORTS')")
+    public ResponseEntity<Map<String, Object>> getContributionTransactionsSummary(
+            @RequestParam(required = false) Long contributionTypeId,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) Long memberId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        
+        LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
+        LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
+        
+        Map<String, Object> summary = contributionService.getContributionTransactionsSummary(
+                principal.getTenantId(), contributionTypeId, memberId, start, end);
+        return ResponseEntity.ok(summary);
     }
 
     // ==================== EXISTING ENDPOINTS ====================

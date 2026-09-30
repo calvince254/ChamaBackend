@@ -32,4 +32,17 @@ public class WelfareEventDto {
     // Contribution stats
     private Integer totalInvolved;
     private Integer paidCount;
+    
+    // Funding contribution types - which contribution pools can fund this welfare
+    private List<Long> fundingContributionTypeIds;
+    private List<FundingSourceDto> fundingSources;  // For display purposes
+    
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class FundingSourceDto {
+        private Long contributionTypeId;
+        private String contributionTypeName;
+    }
 }

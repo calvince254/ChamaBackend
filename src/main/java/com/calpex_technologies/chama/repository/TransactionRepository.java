@@ -127,4 +127,127 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
     @Modifying
     @Query("DELETE FROM Transaction t WHERE t.member.id = :memberId")
     void deleteByMemberId(@Param("memberId") Long memberId);
+    
+    /**
+     * Sum credits (IN) for a member in a specific contribution type.
+     * Used to calculate member's total paid into a contribution type.
+     */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
+           "WHERE t.member.id = :memberId " +
+           "AND t.contributionType.id = :contributionTypeId " +
+           "AND t.tenant.id = :tenantId " +
+           "AND t.direction = 'IN'")
+    BigDecimal sumCreditsByMemberAndContributionType(
+            @Param("memberId") Long memberId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("tenantId") Long tenantId);
+    
+    /**
+     * Sum debits (OUT) for a member in a specific contribution type.
+     * Used to calculate member's withdrawals/deductions from a contribution type (e.g., welfare payments).
+     */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
+           "WHERE t.member.id = :memberId " +
+           "AND t.contributionType.id = :contributionTypeId " +
+           "AND t.tenant.id = :tenantId " +
+           "AND t.direction = 'OUT'")
+    BigDecimal sumDebitsByMemberAndContributionType(
+            @Param("memberId") Long memberId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("tenantId") Long tenantId);
+    
+    // ==================== CONTRIBUTION REPORT QUERIES ====================
+    
+    /**
+     * Get all transactions for a specific contribution type with pagination.
+     * Returns both credits (contributions paid) and debits (welfare deductions).
+     * If contributionTypeId is null, returns all transactions that have a contributionType.
+     */
+    @Query("SELECT t FROM Transaction t " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate) " +
+           "ORDER BY t.date DESC, t.id DESC")
+    Page<Transaction> findContributionTransactions(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable);
+    
+    /**
+     * Get all transactions for a specific contribution type without pagination.
+     * Used for PDF export.
+     */
+    @Query("SELECT t FROM Transaction t " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate) " +
+           "ORDER BY t.date DESC, t.id DESC")
+    List<Transaction> findAllContributionTransactions(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+    
+    /**
+     * Sum credits for contribution type report (with filters).
+     */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND t.direction = 'IN' " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate)")
+    BigDecimal sumContributionCredits(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+    
+    /**
+     * Sum debits for contribution type report (with filters).
+     */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND t.direction = 'OUT' " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate)")
+    BigDecimal sumContributionDebits(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+    
+    /**
+     * Count transactions for contribution type report.
+     */
+    @Query("SELECT COUNT(t) FROM Transaction t " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate)")
+    Long countContributionTransactions(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
 }

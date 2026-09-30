@@ -248,6 +248,7 @@ public class ContributionTopUpService {
                 .member(topUp.getMember())
                 .referenceId(contribution.getId())
                 .referenceType("CONTRIBUTION_TOPUP")
+                .contributionType(topUp.getContributionType())  // Link to contribution type for balance calculation
                 .tenant(topUp.getTenant())
                 .build();
         transactionRepository.save(transaction);

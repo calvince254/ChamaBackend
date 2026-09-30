@@ -133,4 +133,22 @@ public interface ContributionRepository extends JpaRepository<Contribution, Long
             @Param("endDate") java.time.LocalDate endDate,
             @Param("memberId") Long memberId,
             @Param("contributionTypeId") Long contributionTypeId);
+    
+    // Summary totals query for report - using native SQL for performance
+    @Query(value = "SELECT COALESCE(SUM(c.amount_due), 0) as total_due, " +
+           "COALESCE(SUM(c.amount_paid), 0) as total_paid, " +
+           "COUNT(c.id) as record_count " +
+           "FROM contributions c " +
+           "WHERE c.tenant_id = :tenantId " +
+           "AND (:startDate IS NULL OR c.due_date >= :startDate) " +
+           "AND (:endDate IS NULL OR c.due_date <= :endDate) " +
+           "AND (:memberId IS NULL OR c.member_id = :memberId) " +
+           "AND (:contributionTypeId IS NULL OR c.contribution_type_id = :contributionTypeId)",
+           nativeQuery = true)
+    Object[] findReportSummaryNative(
+            @Param("tenantId") Long tenantId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate,
+            @Param("memberId") Long memberId,
+            @Param("contributionTypeId") Long contributionTypeId);
 }

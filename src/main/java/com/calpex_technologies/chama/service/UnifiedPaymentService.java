@@ -947,6 +947,7 @@ public class UnifiedPaymentService {
                 .member(contribution.getMember())
                 .referenceId(contribution.getId())
                 .referenceType("CONTRIBUTION")
+                .contributionType(contribution.getContributionType())  // Link to contribution type for balance calculation
                 .build();
         transactionRepository.save(transaction);
 
@@ -1099,12 +1100,23 @@ public class UnifiedPaymentService {
         BigDecimal newPaidAmount = currentPaid.add(claim.getAmount());
         contribution.setAmountPaid(newPaidAmount);
         contribution.setPaymentReference(claim.getReferenceCode());
+        
+        // Track amount from cash
+        BigDecimal currentFromCash = contribution.getAmountFromCash() != null ? contribution.getAmountFromCash() : BigDecimal.ZERO;
+        contribution.setAmountFromCash(currentFromCash.add(claim.getAmount()));
 
         // Check if fully paid
         BigDecimal expected = contribution.getAmountExpected() != null ? contribution.getAmountExpected() : BigDecimal.ZERO;
         if (newPaidAmount.compareTo(expected) >= 0) {
             contribution.setPaid(true);
             contribution.setPaidDate(LocalDateTime.now());
+            // Check if it's mixed payment (has both fund and cash amounts)
+            BigDecimal fromFund = contribution.getAmountFromFund() != null ? contribution.getAmountFromFund() : BigDecimal.ZERO;
+            if (fromFund.compareTo(BigDecimal.ZERO) > 0 && contribution.getAmountFromCash().compareTo(BigDecimal.ZERO) > 0) {
+                contribution.setPaymentMethod(WelfareContribution.PaymentMethod.MIXED);
+            } else {
+                contribution.setPaymentMethod(WelfareContribution.PaymentMethod.CASH);
+            }
         }
         welfareContributionRepository.save(contribution);
 
@@ -1114,23 +1126,11 @@ public class UnifiedPaymentService {
         event.setTotalCollected(totalCollected != null ? totalCollected : BigDecimal.ZERO);
         welfareEventRepository.save(event);
 
-        // Create GL transaction
-        String description = String.format("Welfare Contribution - %s (%s, Ref: %s)",
-                contribution.getMember().getName(),
-                event.getEventType(),
-                claim.getReferenceCode());
-        Transaction transaction = Transaction.builder()
-                .tenant(payable.getTenant())
-                .date(LocalDate.now())
-                .type(Transaction.TransactionType.WELFARE)
-                .description(description)
-                .amount(claim.getAmount())
-                .direction(Transaction.TransactionDirection.IN)
-                .member(contribution.getMember())
-                .referenceId(contribution.getId())
-                .referenceType("WELFARE_CONTRIBUTION")
-                .build();
-        transactionRepository.save(transaction);
+        // NOTE: We do NOT create a GL transaction here for cash welfare payments.
+        // The welfare amounts are tracked in the welfare_contributions table.
+        // Only fund-to-welfare transfers (OUT transactions) are recorded in the GL
+        // because those represent actual movement of money from contribution accounts.
+        // Cash payments are new money coming in and are tracked via the welfare collection totals.
 
         log.info("Welfare Contribution {} payment confirmed, paid: {}", welfareContributionId, contribution.getPaid());
     }

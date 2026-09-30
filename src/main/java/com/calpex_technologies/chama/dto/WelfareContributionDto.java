@@ -25,6 +25,8 @@ public class WelfareContributionDto {
     
     // Contribution fund payment fields
     private Boolean paidFromContribution;
+    private BigDecimal amountFromFund;
+    private BigDecimal amountFromCash;
     private Long sourceContributionTypeId;
     private String sourceContributionTypeName;
     private Long sourceContributionId;

@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @Data
 @Builder
@@ -32,4 +33,20 @@ public class ContributionDto {
     private Boolean hasPendingClaim; // Changed to Boolean wrapper to ensure proper JSON serialization
     
     private Long payableId; // ID of the Payable record for confirming payments
+    
+    // Welfare deductions from this contribution
+    private BigDecimal totalWelfareDeductions;
+    private List<WelfareDeductionDto> welfareDeductions;
+    
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class WelfareDeductionDto {
+        private Long welfareEventId;
+        private String welfareEventType;
+        private String beneficiaryName;
+        private BigDecimal amount;
+        private String date;
+    }
 }

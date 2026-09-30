@@ -52,6 +52,20 @@ public class WelfareContribution extends TenantAwareEntity {
     private Boolean paidFromContribution = false;
 
     /**
+     * Amount paid from contribution fund
+     */
+    @Column(name = "amount_from_fund", precision = 15, scale = 2)
+    @Builder.Default
+    private BigDecimal amountFromFund = BigDecimal.ZERO;
+
+    /**
+     * Amount paid via cash/external payment
+     */
+    @Column(name = "amount_from_cash", precision = 15, scale = 2)
+    @Builder.Default
+    private BigDecimal amountFromCash = BigDecimal.ZERO;
+
+    /**
      * The contribution type from which funds were deducted
      */
     @ManyToOne(fetch = FetchType.LAZY)
@@ -72,6 +86,7 @@ public class WelfareContribution extends TenantAwareEntity {
 
     public enum PaymentMethod {
         CASH,               // Normal cash/direct payment
-        CONTRIBUTION_FUND   // Payment from member's contribution pool
+        CONTRIBUTION_FUND,  // Payment from member's contribution pool
+        MIXED               // Part from fund, part from cash
     }
 }

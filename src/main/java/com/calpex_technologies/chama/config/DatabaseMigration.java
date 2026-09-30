@@ -35,6 +35,10 @@ public class DatabaseMigration implements ApplicationRunner {
         createPasswordHistoryTable();
         fixAuditLogMemberForeignKey();
         addContributionTypeCategoryColumn();
+        expandWelfareContributionPaymentMethodColumn();
+        addContributionTypeToTransactions();
+        backfillContributionTypeOnTransactions();
+        addSourceContributionTypeToWelfareContributions();
     }
 
     /**
@@ -478,6 +482,211 @@ public class DatabaseMigration implements ApplicationRunner {
             }
         } catch (Exception e) {
             log.warn("Could not add category column to contribution_types: {}. This may be expected on first run.", e.getMessage());
+        }
+    }
+
+    /**
+     * Expand welfare_contributions.payment_method column to VARCHAR(20).
+     * This allows the new MIXED value (5 chars) which exceeds ENUM/small VARCHAR constraints.
+     */
+    private void expandWelfareContributionPaymentMethodColumn() {
+        try {
+            // Check if the welfare_contributions table exists
+            String checkTable = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'welfare_contributions'";
+            Integer tableExists = jdbcTemplate.queryForObject(checkTable, Integer.class);
+            
+            if (tableExists == null || tableExists == 0) {
+                log.info("Welfare_contributions table doesn't exist yet, skipping migration");
+                return;
+            }
+
+            // Check if the payment_method column exists
+            String checkColumn = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'welfare_contributions' AND column_name = 'payment_method'";
+            Integer columnExists = jdbcTemplate.queryForObject(checkColumn, Integer.class);
+            
+            if (columnExists == null || columnExists == 0) {
+                log.info("payment_method column doesn't exist in welfare_contributions yet, skipping migration");
+                return;
+            }
+
+            // Check current column type
+            String checkType = "SELECT DATA_TYPE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'welfare_contributions' AND column_name = 'payment_method'";
+            String dataType = jdbcTemplate.queryForObject(checkType, String.class);
+
+            if ("enum".equalsIgnoreCase(dataType)) {
+                log.info("Converting welfare_contributions.payment_method from ENUM to VARCHAR(20)...");
+                jdbcTemplate.execute("ALTER TABLE welfare_contributions MODIFY COLUMN payment_method VARCHAR(20) DEFAULT 'CASH'");
+                log.info("Successfully converted welfare_contributions.payment_method to VARCHAR(20)");
+            } else {
+                // Check current column length for VARCHAR
+                String checkLength = "SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'welfare_contributions' AND column_name = 'payment_method'";
+                Integer currentLength = jdbcTemplate.queryForObject(checkLength, Integer.class);
+
+                if (currentLength != null && currentLength < 20) {
+                    log.info("Expanding welfare_contributions.payment_method from VARCHAR({}) to VARCHAR(20)...", currentLength);
+                    jdbcTemplate.execute("ALTER TABLE welfare_contributions MODIFY COLUMN payment_method VARCHAR(20) DEFAULT 'CASH'");
+                    log.info("Successfully expanded welfare_contributions.payment_method to VARCHAR(20)");
+                } else {
+                    log.debug("welfare_contributions.payment_method is already large enough, no migration needed");
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not migrate welfare_contributions.payment_method column: {}. This may be expected on first run.", e.getMessage());
+        }
+    }
+
+    /**
+     * Add contribution_type_id column to transactions table.
+     * This allows tracking which contribution type a transaction belongs to,
+     * enabling balance calculation as: Credits - Debits per contribution type.
+     */
+    private void addContributionTypeToTransactions() {
+        try {
+            // Check if the transactions table exists
+            String checkTable = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'transactions'";
+            Integer tableExists = jdbcTemplate.queryForObject(checkTable, Integer.class);
+            
+            if (tableExists == null || tableExists == 0) {
+                log.info("Transactions table doesn't exist yet, skipping migration");
+                return;
+            }
+
+            // Check if the column already exists
+            String checkColumn = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'transactions' AND column_name = 'contribution_type_id'";
+            Integer columnExists = jdbcTemplate.queryForObject(checkColumn, Integer.class);
+            
+            if (columnExists == null || columnExists == 0) {
+                log.info("Adding contribution_type_id column to transactions table...");
+                jdbcTemplate.execute("ALTER TABLE transactions ADD COLUMN contribution_type_id BIGINT NULL");
+                jdbcTemplate.execute("ALTER TABLE transactions ADD CONSTRAINT fk_transactions_contribution_type FOREIGN KEY (contribution_type_id) REFERENCES contribution_types(id) ON DELETE SET NULL");
+                log.info("Successfully added contribution_type_id column to transactions table");
+                
+                // Backfill existing CONTRIBUTION transactions by linking to the contribution record's type
+                log.info("Backfilling contribution_type_id for existing CONTRIBUTION transactions...");
+                int updated = jdbcTemplate.update("""
+                    UPDATE transactions t
+                    JOIN contributions c ON t.reference_id = c.id AND t.reference_type = 'CONTRIBUTION'
+                    SET t.contribution_type_id = c.contribution_type_id
+                    WHERE t.type = 'CONTRIBUTION' AND t.contribution_type_id IS NULL
+                """);
+                log.info("Backfilled {} CONTRIBUTION transactions with contribution_type_id", updated);
+                
+                // Also backfill CONTRIBUTION_TOPUP transactions
+                updated = jdbcTemplate.update("""
+                    UPDATE transactions t
+                    JOIN contribution_top_ups tu ON t.reference_id = tu.contribution_id AND t.reference_type = 'CONTRIBUTION_TOPUP'
+                    SET t.contribution_type_id = tu.contribution_type_id
+                    WHERE t.type = 'CONTRIBUTION' AND t.contribution_type_id IS NULL
+                """);
+                log.info("Backfilled {} CONTRIBUTION_TOPUP transactions with contribution_type_id", updated);
+            } else {
+                log.debug("contribution_type_id column already exists in transactions, no migration needed");
+            }
+        } catch (Exception e) {
+            log.warn("Could not add contribution_type_id column to transactions: {}. This may be expected on first run.", e.getMessage());
+        }
+    }
+
+    /**
+     * Backfill contribution_type_id for any CONTRIBUTION transactions that still have it NULL.
+     * This runs every time to catch transactions that were created before the feature was added
+     * or where the backfill didn't run properly.
+     */
+    private void backfillContributionTypeOnTransactions() {
+        try {
+            // Check if the transactions table exists
+            String checkTable = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'transactions'";
+            Integer tableExists = jdbcTemplate.queryForObject(checkTable, Integer.class);
+            
+            if (tableExists == null || tableExists == 0) {
+                return;
+            }
+
+            // Count how many CONTRIBUTION transactions have null contribution_type_id
+            String countNull = "SELECT COUNT(*) FROM transactions WHERE type = 'CONTRIBUTION' AND contribution_type_id IS NULL AND reference_type = 'CONTRIBUTION'";
+            Integer nullCount = jdbcTemplate.queryForObject(countNull, Integer.class);
+            
+            if (nullCount != null && nullCount > 0) {
+                log.info("Found {} CONTRIBUTION transactions with null contribution_type_id, backfilling...", nullCount);
+                
+                // Backfill from the contributions table
+                int updated = jdbcTemplate.update("""
+                    UPDATE transactions t
+                    JOIN contributions c ON t.reference_id = c.id
+                    SET t.contribution_type_id = c.contribution_type_id
+                    WHERE t.type = 'CONTRIBUTION' 
+                    AND t.reference_type = 'CONTRIBUTION'
+                    AND t.contribution_type_id IS NULL
+                    AND c.contribution_type_id IS NOT NULL
+                """);
+                log.info("Backfilled {} CONTRIBUTION transactions with contribution_type_id", updated);
+            }
+            
+            // Also check for CONTRIBUTION_TOPUP transactions
+            String countTopupNull = "SELECT COUNT(*) FROM transactions WHERE type = 'CONTRIBUTION' AND contribution_type_id IS NULL AND reference_type = 'CONTRIBUTION_TOPUP'";
+            Integer topupNullCount = jdbcTemplate.queryForObject(countTopupNull, Integer.class);
+            
+            if (topupNullCount != null && topupNullCount > 0) {
+                log.info("Found {} CONTRIBUTION_TOPUP transactions with null contribution_type_id, backfilling...", topupNullCount);
+                
+                int updated = jdbcTemplate.update("""
+                    UPDATE transactions t
+                    JOIN contribution_top_ups tu ON t.reference_id = tu.contribution_id
+                    SET t.contribution_type_id = tu.contribution_type_id
+                    WHERE t.type = 'CONTRIBUTION' 
+                    AND t.reference_type = 'CONTRIBUTION_TOPUP'
+                    AND t.contribution_type_id IS NULL
+                    AND tu.contribution_type_id IS NOT NULL
+                """);
+                log.info("Backfilled {} CONTRIBUTION_TOPUP transactions with contribution_type_id", updated);
+            }
+        } catch (Exception e) {
+            log.warn("Could not backfill contribution_type_id on transactions: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Add source_contribution_type_id column to welfare_contributions table if it doesn't exist.
+     * This column tracks which contribution type funds were used to pay for welfare.
+     */
+    private void addSourceContributionTypeToWelfareContributions() {
+        try {
+            // Check if the welfare_contributions table exists
+            String checkTable = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'welfare_contributions'";
+            Integer tableExists = jdbcTemplate.queryForObject(checkTable, Integer.class);
+            
+            if (tableExists == null || tableExists == 0) {
+                log.info("Welfare_contributions table doesn't exist yet, skipping migration");
+                return;
+            }
+
+            // Check if the source_contribution_type_id column already exists
+            String checkColumn = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'welfare_contributions' AND column_name = 'source_contribution_type_id'";
+            Integer columnExists = jdbcTemplate.queryForObject(checkColumn, Integer.class);
+            
+            if (columnExists == null || columnExists == 0) {
+                log.info("Adding source_contribution_type_id column to welfare_contributions table...");
+                jdbcTemplate.execute("ALTER TABLE welfare_contributions ADD COLUMN source_contribution_type_id BIGINT NULL");
+                jdbcTemplate.execute("ALTER TABLE welfare_contributions ADD CONSTRAINT fk_welfare_contrib_source_type FOREIGN KEY (source_contribution_type_id) REFERENCES contribution_types(id) ON DELETE SET NULL");
+                log.info("Successfully added source_contribution_type_id column to welfare_contributions table");
+            } else {
+                log.debug("source_contribution_type_id column already exists in welfare_contributions, no migration needed");
+            }
+            
+            // Check if the source_contribution_id column exists (for completeness)
+            String checkContribColumn = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'welfare_contributions' AND column_name = 'source_contribution_id'";
+            Integer contribColumnExists = jdbcTemplate.queryForObject(checkContribColumn, Integer.class);
+            
+            if (contribColumnExists == null || contribColumnExists == 0) {
+                log.info("Adding source_contribution_id column to welfare_contributions table...");
+                jdbcTemplate.execute("ALTER TABLE welfare_contributions ADD COLUMN source_contribution_id BIGINT NULL");
+                jdbcTemplate.execute("ALTER TABLE welfare_contributions ADD CONSTRAINT fk_welfare_contrib_source_contrib FOREIGN KEY (source_contribution_id) REFERENCES contributions(id) ON DELETE SET NULL");
+                log.info("Successfully added source_contribution_id column to welfare_contributions table");
+            } else {
+                log.debug("source_contribution_id column already exists in welfare_contributions, no migration needed");
+            }
+        } catch (Exception e) {
+            log.warn("Could not add source columns to welfare_contributions: {}. This may be expected on first run.", e.getMessage());
         }
     }
 }

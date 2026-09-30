@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -104,14 +105,22 @@ public class WelfareController {
     public ResponseEntity<WelfareContributionDto> payFromContributionFund(
             @PathVariable Long eventId,
             @PathVariable Long memberId,
-            @RequestBody Map<String, Long> body,
+            @RequestBody Map<String, Object> body,
             @AuthenticationPrincipal UserPrincipal principal) {
-        Long contributionTypeId = body.get("contributionTypeId");
+        Long contributionTypeId = body.get("contributionTypeId") != null 
+                ? ((Number) body.get("contributionTypeId")).longValue() : null;
         if (contributionTypeId == null) {
             throw new RuntimeException("contributionTypeId is required");
         }
+        
+        // Optional amount parameter for partial payments
+        BigDecimal amount = null;
+        if (body.get("amount") != null) {
+            amount = new BigDecimal(body.get("amount").toString());
+        }
+        
         return ResponseEntity.ok(welfareService.payFromContributionFund(
-                eventId, memberId, contributionTypeId, principal.getTenantId()));
+                eventId, memberId, contributionTypeId, amount, principal.getTenantId()));
     }
 
     /**
@@ -122,5 +131,15 @@ public class WelfareController {
             @PathVariable Long memberId,
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(welfareService.getMemberContributionBalances(memberId, principal.getTenantId()));
+    }
+    
+    /**
+     * Debug endpoint to check welfare contributions for a member
+     */
+    @GetMapping("/debug/member/{memberId}/welfare-contributions")
+    public ResponseEntity<List<Map<String, Object>>> debugMemberWelfareContributions(
+            @PathVariable Long memberId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(welfareService.debugGetMemberWelfareContributions(memberId, principal.getTenantId()));
     }
 }

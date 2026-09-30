@@ -43,6 +43,14 @@ public class Transaction extends TenantAwareEntity {
     @Column(name = "reference_type")
     private String referenceType;
 
+    /**
+     * For contribution-related transactions, tracks which contribution type this belongs to.
+     * Used to calculate member balances per contribution type (credits - debits).
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "contribution_type_id")
+    private ContributionType contributionType;
+
     public enum TransactionType {
         CONTRIBUTION, LOAN_DISBURSEMENT, LOAN_REPAYMENT, LOAN_INTEREST, LOAN_PENALTY, WELFARE, FINE, PENALTY, INVESTMENT, INVESTMENT_RETURN, REGISTRATION_FEE, EXPENSE, SHARE_PURCHASE, MERRY_GO_ROUND, PAYOUT, PROCESSING_FEE, OTHER
     }
