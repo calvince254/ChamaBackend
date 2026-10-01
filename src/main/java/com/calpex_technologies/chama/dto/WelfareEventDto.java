@@ -22,6 +22,8 @@ public class WelfareEventDto {
     private BigDecimal amountPerMember;
     private BigDecimal totalExpected;
     private BigDecimal totalCollected;
+    private BigDecimal totalDisbursed;      // Amount already disbursed to beneficiary
+    private BigDecimal availableToDisbure;  // totalCollected - totalDisbursed
     private String status;
     private String description;
     

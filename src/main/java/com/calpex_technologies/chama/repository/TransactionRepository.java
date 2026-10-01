@@ -250,4 +250,17 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             @Param("memberId") Long memberId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+    
+    /**
+     * Find transactions by tenant, reference type, and reference ID.
+     * Used for finding related transactions (e.g., welfare fund deductions).
+     */
+    @Query("SELECT t FROM Transaction t " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.referenceType = :referenceType " +
+           "AND t.referenceId = :referenceId")
+    List<Transaction> findByTenantIdAndReferenceTypeAndReferenceId(
+            @Param("tenantId") Long tenantId,
+            @Param("referenceType") String referenceType,
+            @Param("referenceId") Long referenceId);
 }

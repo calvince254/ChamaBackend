@@ -39,6 +39,7 @@ public class DatabaseMigration implements ApplicationRunner {
         addContributionTypeToTransactions();
         backfillContributionTypeOnTransactions();
         addSourceContributionTypeToWelfareContributions();
+        expandWelfareEventStatusColumn();
     }
 
     /**
@@ -687,6 +688,47 @@ public class DatabaseMigration implements ApplicationRunner {
             }
         } catch (Exception e) {
             log.warn("Could not add source columns to welfare_contributions: {}. This may be expected on first run.", e.getMessage());
+        }
+    }
+
+    /**
+     * Expand welfare_events.status column to VARCHAR to support new status values (DISBURSED, CANCELLED).
+     * MySQL ENUM columns can't accept values not in the original definition.
+     */
+    private void expandWelfareEventStatusColumn() {
+        try {
+            // Check if the welfare_events table exists
+            String checkTable = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'welfare_events'";
+            Integer tableExists = jdbcTemplate.queryForObject(checkTable, Integer.class);
+            
+            if (tableExists == null || tableExists == 0) {
+                log.info("Welfare_events table doesn't exist yet, skipping status migration");
+                return;
+            }
+
+            // Check the current data type of the status column
+            String checkDataType = "SELECT DATA_TYPE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'welfare_events' AND column_name = 'status'";
+            String dataType = jdbcTemplate.queryForObject(checkDataType, String.class);
+            
+            if ("enum".equalsIgnoreCase(dataType)) {
+                log.info("Converting welfare_events.status from ENUM to VARCHAR(20)...");
+                jdbcTemplate.execute("ALTER TABLE welfare_events MODIFY COLUMN status VARCHAR(20) NOT NULL DEFAULT 'OPEN'");
+                log.info("Successfully converted welfare_events.status to VARCHAR(20)");
+            } else {
+                // Check if VARCHAR is large enough
+                String checkLength = "SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'welfare_events' AND column_name = 'status'";
+                Integer currentLength = jdbcTemplate.queryForObject(checkLength, Integer.class);
+                
+                if (currentLength != null && currentLength < 20) {
+                    log.info("Expanding welfare_events.status from VARCHAR({}) to VARCHAR(20)...", currentLength);
+                    jdbcTemplate.execute("ALTER TABLE welfare_events MODIFY COLUMN status VARCHAR(20) NOT NULL DEFAULT 'OPEN'");
+                    log.info("Successfully expanded welfare_events.status to VARCHAR(20)");
+                } else {
+                    log.debug("welfare_events.status is already VARCHAR({}), no migration needed", currentLength);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not expand welfare_events.status column: {}. This may be expected on first run.", e.getMessage());
         }
     }
 }

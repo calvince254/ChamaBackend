@@ -523,6 +523,11 @@ public class WelfareService {
                         .collect(Collectors.toList())
                 : List.of();
 
+        // Calculate disbursement amounts
+        BigDecimal totalDisbursed = getAlreadyDisbursedAmount(event, event.getTenant().getId());
+        BigDecimal totalCollected = event.getTotalCollected() != null ? event.getTotalCollected() : BigDecimal.ZERO;
+        BigDecimal availableToDisbure = totalCollected.subtract(totalDisbursed);
+
         return WelfareEventDto.builder()
                 .id(event.getId())
                 .memberId(event.getMember().getId())
@@ -533,6 +538,8 @@ public class WelfareService {
                 .amountPerMember(event.getAmountPerMember())
                 .totalExpected(event.getTotalExpected())
                 .totalCollected(event.getTotalCollected())
+                .totalDisbursed(totalDisbursed)
+                .availableToDisbure(availableToDisbure)
                 .status(event.getStatus().name())
                 .description(event.getDescription())
                 .allMembersInvolved(event.getAllMembersInvolved())
@@ -661,5 +668,264 @@ public class WelfareService {
                     return data;
                 })
                 .collect(Collectors.toList());
+    }
+
+    // ==================== DISBURSEMENT ====================
+
+    /**
+     * Disburse welfare funds to the beneficiary.
+     * Can be done partially (with whatever has been collected) or fully.
+     * Creates a transaction record showing funds going out to beneficiary.
+     */
+    @Transactional
+    public WelfareEventDto disburseWelfare(Long eventId, BigDecimal amount, Long tenantId) {
+        log.info("=== DISBURSING WELFARE ===");
+        log.info("eventId={}, amount={}, tenantId={}", eventId, amount, tenantId);
+        
+        WelfareEvent event = welfareEventRepository.findByIdAndTenantId(eventId, tenantId)
+                .orElseThrow(() -> new RuntimeException("Welfare event not found"));
+        
+        if (event.getStatus() == WelfareEvent.WelfareStatus.CANCELLED) {
+            throw new RuntimeException("Cannot disburse a cancelled welfare event");
+        }
+        
+        if (event.getStatus() == WelfareEvent.WelfareStatus.DISBURSED) {
+            throw new RuntimeException("Welfare event has already been fully disbursed");
+        }
+        
+        // Calculate how much is available to disburse
+        BigDecimal collected = event.getTotalCollected() != null ? event.getTotalCollected() : BigDecimal.ZERO;
+        BigDecimal alreadyDisbursed = getAlreadyDisbursedAmount(event, tenantId);
+        BigDecimal availableToDisbure = collected.subtract(alreadyDisbursed);
+        
+        log.info("Collected: {}, Already disbursed: {}, Available: {}", collected, alreadyDisbursed, availableToDisbure);
+        
+        // If no specific amount, disburse all available
+        BigDecimal disburseAmount = amount != null ? amount : availableToDisbure;
+        
+        if (disburseAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("No funds available to disburse");
+        }
+        
+        if (disburseAmount.compareTo(availableToDisbure) > 0) {
+            throw new RuntimeException(String.format(
+                    "Cannot disburse more than available. Requested: KES %,.2f, Available: KES %,.2f",
+                    disburseAmount, availableToDisbure));
+        }
+        
+        // Create disbursement transaction (OUT to beneficiary)
+        Transaction disburseTx = Transaction.builder()
+                .date(LocalDate.now())
+                .type(Transaction.TransactionType.WELFARE)
+                .description("Welfare disbursement for " + event.getEventType() + " to " + event.getMember().getName())
+                .amount(disburseAmount)
+                .direction(Transaction.TransactionDirection.OUT)
+                .member(event.getMember())  // Beneficiary
+                .referenceId(event.getId())
+                .referenceType("WELFARE_DISBURSEMENT")
+                .tenant(event.getTenant())
+                .build();
+        transactionRepository.save(disburseTx);
+        
+        log.info("Created disbursement transaction: amount={}, beneficiary={}", disburseAmount, event.getMember().getName());
+        
+        // Check status: DISBURSED only if ALL members paid AND all funds disbursed
+        BigDecimal totalDisbursed = alreadyDisbursed.add(disburseAmount);
+        List<WelfareContribution> contributions = welfareContributionRepository
+                .findByWelfareEventIdAndTenantId(eventId, tenantId);
+        boolean allPaid = contributions.stream().allMatch(c -> c.getPaid() != null && c.getPaid());
+        BigDecimal totalExpected = event.getTotalExpected() != null ? event.getTotalExpected() : BigDecimal.ZERO;
+        
+        if (allPaid && totalDisbursed.compareTo(totalExpected) >= 0) {
+            // All members paid and all funds disbursed
+            event.setStatus(WelfareEvent.WelfareStatus.DISBURSED);
+            log.info("All members paid and fully disbursed, status set to DISBURSED");
+        } else if (totalDisbursed.compareTo(BigDecimal.ZERO) > 0) {
+            // Some funds disbursed but not complete
+            event.setStatus(WelfareEvent.WelfareStatus.PARTIALLY_DISBURSED);
+            log.info("Partial disbursement, status set to PARTIALLY_DISBURSED");
+        }
+        
+        welfareEventRepository.save(event);
+        
+        return toDto(event);
+    }
+    
+    /**
+     * Get total amount already disbursed for a welfare event
+     */
+    private BigDecimal getAlreadyDisbursedAmount(WelfareEvent event, Long tenantId) {
+        List<Transaction> disbursements = transactionRepository.findByTenantIdAndReferenceTypeAndReferenceId(
+                tenantId, "WELFARE_DISBURSEMENT", event.getId());
+        
+        return disbursements.stream()
+                .map(Transaction::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    // ==================== CANCELLATION ====================
+
+    /**
+     * Cancel a welfare event and reverse ONLY FUND contributions (not cash).
+     * 
+     * KEY LOGIC:
+     * - Cash payments do NOT create finance transactions - no reversal needed
+     * - Fund payments create debit transactions - these need to be credited back
+     * - If already disbursed: only reverse the undisbursed FUND portion
+     * - If not disbursed: reverse ALL fund portions
+     * 
+     * Example: Member paid KES 1000 (KES 6 from fund, KES 994 cash)
+     * - If NOT disbursed yet: reverse KES 6 (credit back to fund), reset contribution
+     * - If ALREADY disbursed: nothing to reverse (money went to beneficiary)
+     */
+    @Transactional
+    public WelfareEventDto cancelWelfare(Long eventId, String reason, Long tenantId) {
+        log.info("=== CANCELLING WELFARE EVENT ===");
+        log.info("eventId={}, reason={}, tenantId={}", eventId, reason, tenantId);
+        
+        WelfareEvent event = welfareEventRepository.findByIdAndTenantId(eventId, tenantId)
+                .orElseThrow(() -> new RuntimeException("Welfare event not found"));
+        
+        if (event.getStatus() == WelfareEvent.WelfareStatus.CANCELLED) {
+            throw new RuntimeException("Welfare event is already cancelled");
+        }
+        
+        if (event.getStatus() == WelfareEvent.WelfareStatus.DISBURSED) {
+            throw new RuntimeException("Cannot cancel a fully disbursed welfare event");
+        }
+        
+        // Calculate amounts
+        BigDecimal totalCollected = event.getTotalCollected() != null ? event.getTotalCollected() : BigDecimal.ZERO;
+        BigDecimal disbursedAmount = getAlreadyDisbursedAmount(event, tenantId);
+        BigDecimal undisbursedAmount = totalCollected.subtract(disbursedAmount);
+        
+        log.info("Total collected: {}, Already disbursed: {}, Undisbursed: {}", 
+                totalCollected, disbursedAmount, undisbursedAmount);
+        
+        // Get all contributions for this event
+        List<WelfareContribution> contributions = welfareContributionRepository
+                .findByWelfareEventIdAndTenantId(eventId, tenantId);
+        
+        // Calculate total fund portion that was collected (this is what we might need to reverse)
+        BigDecimal totalFundPortionCollected = contributions.stream()
+                .filter(c -> c.getAmountFromFund() != null)
+                .map(WelfareContribution::getAmountFromFund)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        
+        log.info("Total fund portion collected: {}", totalFundPortionCollected);
+        
+        // If already disbursed, we need to figure out how much of the FUND portion is undisbursed
+        // Assumption: disbursement takes from the total collected (fund + cash mixed)
+        // We reverse fund portions proportionally or up to the undisbursed amount
+        BigDecimal fundAmountToReverse;
+        if (disbursedAmount.compareTo(BigDecimal.ZERO) > 0) {
+            // Some was disbursed. The fund portion to reverse is the MIN of:
+            // - total fund collected
+            // - undisbursed amount
+            // Because if we collected KES 6 from fund and disbursed KES 1000, the fund portion is gone
+            // But if we collected KES 100 from fund and only disbursed KES 50, we can reverse KES 50 from fund
+            fundAmountToReverse = totalFundPortionCollected.min(undisbursedAmount);
+        } else {
+            // Nothing disbursed - reverse all fund portions
+            fundAmountToReverse = totalFundPortionCollected;
+        }
+        
+        log.info("Fund amount to reverse: {}", fundAmountToReverse);
+        
+        BigDecimal totalReversed = BigDecimal.ZERO;
+        
+        // Reverse contribution fund debit transactions (WELFARE_FROM_CONTRIBUTION)
+        // Only reverse up to fundAmountToReverse
+        for (WelfareContribution contribution : contributions) {
+            if (fundAmountToReverse.subtract(totalReversed).compareTo(BigDecimal.ZERO) <= 0) {
+                break; // We've reversed enough
+            }
+            
+            if (contribution.getPaidFromContribution() != null && contribution.getPaidFromContribution() 
+                    && contribution.getAmountFromFund() != null 
+                    && contribution.getAmountFromFund().compareTo(BigDecimal.ZERO) > 0) {
+                
+                // Find the debit transactions for this contribution
+                List<Transaction> debitTxs = transactionRepository.findByTenantIdAndReferenceTypeAndReferenceId(
+                        tenantId, "WELFARE_FROM_CONTRIBUTION", contribution.getId());
+                
+                for (Transaction debitTx : debitTxs) {
+                    BigDecimal remainingToReverse = fundAmountToReverse.subtract(totalReversed);
+                    if (remainingToReverse.compareTo(BigDecimal.ZERO) <= 0) {
+                        break;
+                    }
+                    
+                    // Calculate how much to reverse from this transaction
+                    BigDecimal amountToReverse = debitTx.getAmount().min(remainingToReverse);
+                    
+                    // Create reversal (credit) transaction
+                    Transaction reversalTx = Transaction.builder()
+                            .date(LocalDate.now())
+                            .type(Transaction.TransactionType.WELFARE)
+                            .description("REVERSAL: " + debitTx.getDescription() + " - Event cancelled" + 
+                                    (reason != null ? ": " + reason : ""))
+                            .amount(amountToReverse)
+                            .direction(Transaction.TransactionDirection.IN)  // Credit back to fund
+                            .member(debitTx.getMember())
+                            .referenceId(contribution.getId())
+                            .referenceType("WELFARE_CANCELLATION_REVERSAL")
+                            .contributionType(debitTx.getContributionType())
+                            .tenant(event.getTenant())
+                            .build();
+                    transactionRepository.save(reversalTx);
+                    
+                    totalReversed = totalReversed.add(amountToReverse);
+                    
+                    log.info("Reversed fund transaction for member {}: +{} to {}", 
+                            debitTx.getMember().getName(), 
+                            amountToReverse,
+                            debitTx.getContributionType() != null ? debitTx.getContributionType().getName() : "N/A");
+                }
+            }
+        }
+        
+        log.info("Total fund amount reversed: {}", totalReversed);
+        
+        // Reset contribution records if nothing was disbursed
+        if (disbursedAmount.compareTo(BigDecimal.ZERO) == 0) {
+            for (WelfareContribution contribution : contributions) {
+                if (contribution.getPaid() != null && contribution.getPaid()) {
+                    // Full reset - nothing was disbursed
+                    contribution.setPaid(false);
+                    contribution.setAmountPaid(BigDecimal.ZERO);
+                    contribution.setAmountFromFund(BigDecimal.ZERO);
+                    contribution.setAmountFromCash(BigDecimal.ZERO);
+                    contribution.setPaidDate(null);
+                    contribution.setPaidFromContribution(false);
+                    contribution.setSourceContributionType(null);
+                    contribution.setSourceContribution(null);
+                    contribution.setPaymentMethod(null);
+                    welfareContributionRepository.save(contribution);
+                }
+            }
+        }
+        
+        // Update event status
+        if (disbursedAmount.compareTo(BigDecimal.ZERO) > 0) {
+            // Some funds were disbursed - mark as CLOSED (partial completion)
+            event.setStatus(WelfareEvent.WelfareStatus.CLOSED);
+            event.setTotalCollected(disbursedAmount); // Only keep what was actually disbursed
+            event.setDescription((event.getDescription() != null ? event.getDescription() + "\n\n" : "") + 
+                    "PARTIALLY CANCELLED on " + LocalDate.now() + ". Disbursed: KES " + disbursedAmount + 
+                    (reason != null ? ". Reason: " + reason : ""));
+        } else {
+            // No disbursement - full cancellation
+            event.setStatus(WelfareEvent.WelfareStatus.CANCELLED);
+            event.setTotalCollected(BigDecimal.ZERO);
+            event.setDescription((event.getDescription() != null ? event.getDescription() + "\n\n" : "") + 
+                    "CANCELLED on " + LocalDate.now() + (reason != null ? ": " + reason : ""));
+        }
+        welfareEventRepository.save(event);
+        
+        log.info("=== WELFARE EVENT CANCELLED ===");
+        log.info("Event {} cancelled. Disbursed preserved: {}, Fund reversed: {}", 
+                eventId, disbursedAmount, totalReversed);
+        
+        return toDto(event);
     }
 }

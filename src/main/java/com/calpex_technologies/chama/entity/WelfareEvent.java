@@ -78,6 +78,6 @@ public class WelfareEvent extends TenantAwareEntity {
     }
 
     public enum WelfareStatus {
-        OPEN, CLOSED
+        OPEN, PARTIALLY_DISBURSED, DISBURSED, CLOSED, CANCELLED
     }
 }

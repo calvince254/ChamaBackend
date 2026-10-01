@@ -142,4 +142,37 @@ public class WelfareController {
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(welfareService.debugGetMemberWelfareContributions(memberId, principal.getTenantId()));
     }
+
+    // ==================== DISBURSEMENT ====================
+
+    /**
+     * Disburse welfare funds to the beneficiary.
+     * Can disburse partial amounts (whatever has been collected).
+     */
+    @PostMapping("/{id}/disburse")
+    public ResponseEntity<WelfareEventDto> disburseWelfare(
+            @PathVariable Long id,
+            @RequestBody(required = false) Map<String, Object> body,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        BigDecimal amount = null;
+        if (body != null && body.get("amount") != null) {
+            amount = new BigDecimal(body.get("amount").toString());
+        }
+        return ResponseEntity.ok(welfareService.disburseWelfare(id, amount, principal.getTenantId()));
+    }
+
+    // ==================== CANCELLATION ====================
+
+    /**
+     * Cancel a welfare event and reverse all associated transactions.
+     * This will credit back funds to members' contribution pools.
+     */
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<WelfareEventDto> cancelWelfare(
+            @PathVariable Long id,
+            @RequestBody(required = false) Map<String, String> body,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        String reason = body != null ? body.get("reason") : null;
+        return ResponseEntity.ok(welfareService.cancelWelfare(id, reason, principal.getTenantId()));
+    }
 }

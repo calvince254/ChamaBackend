@@ -111,6 +111,7 @@ public class HttpConfigurer {
             .requestMatchers("DELETE", "/api/welfare/{id}").hasAnyAuthority("FULL_ACCESS", "DELETE_WELFARE_EVENT")
             .requestMatchers("POST", "/api/welfare/{id}/approve").hasAnyAuthority("FULL_ACCESS", "APPROVE_WELFARE_CLAIM")
             .requestMatchers("POST", "/api/welfare/{id}/disburse").hasAnyAuthority("FULL_ACCESS", "DISBURSE_WELFARE")
+            .requestMatchers("POST", "/api/welfare/{id}/cancel").hasAnyAuthority("FULL_ACCESS", "CANCEL_WELFARE")
             .requestMatchers("PUT", "/api/welfare/{id}/contributions/**").hasAnyAuthority("FULL_ACCESS", "MANAGE_WELFARE_CONTRIBUTIONS")
             .requestMatchers("POST", "/api/welfare/{id}/contributions/**").hasAnyAuthority("FULL_ACCESS", "MANAGE_WELFARE_CONTRIBUTIONS")
             
@@ -425,6 +426,7 @@ public class HttpConfigurer {
             new PermissionDefinition("DELETE_WELFARE_EVENT", "Delete Welfare Event"),
             new PermissionDefinition("APPROVE_WELFARE_CLAIM", "Approve Welfare Claim"),
             new PermissionDefinition("DISBURSE_WELFARE", "Disburse Welfare"),
+            new PermissionDefinition("CANCEL_WELFARE", "Cancel Welfare Event"),
             new PermissionDefinition("MANAGE_WELFARE_CONTRIBUTIONS", "Manage Welfare Contributions"),
             new PermissionDefinition("PAY_WELFARE_FROM_CONTRIBUTION", "Pay Welfare from Contribution Fund")
         ));
