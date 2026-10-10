@@ -259,7 +259,61 @@ public class ContributionTransactionsPdfService {
         table.addCell(cell);
     }
 
+    private void addContributionsTable(Document document, List<ContributionReportItemDto> contributions,
+                                        PdfFont boldFont, PdfFont regularFont) {
+        // Section header
+        Table sectionHeader = new Table(UnitValue.createPercentArray(new float[]{1, 1}))
+                .setWidth(UnitValue.createPercentValue(100))
+                .setMarginLeft(30).setMarginRight(30).setMarginTop(20).setMarginBottom(8);
 
+        Cell titleCell = new Cell().setBorder(Border.NO_BORDER);
+        titleCell.add(new Paragraph("CONTRIBUTION DETAILS")
+                .setFont(boldFont).setFontSize(11).setFontColor(TEXT_DARK));
+        sectionHeader.addCell(titleCell);
+
+        Cell countCell = new Cell().setBorder(Border.NO_BORDER).setTextAlignment(TextAlignment.RIGHT);
+        countCell.add(new Paragraph(contributions.size() + " records")
+                .setFont(regularFont).setFontSize(8).setFontColor(TEXT_MUTED));
+        sectionHeader.addCell(countCell);
+
+        document.add(sectionHeader);
+
+        if (contributions.isEmpty()) {
+            Table emptyTable = new Table(UnitValue.createPercentArray(new float[]{1}))
+                    .setWidth(UnitValue.createPercentValue(100))
+                    .setMarginLeft(30).setMarginRight(30);
+            Cell emptyCell = new Cell().setBorder(Border.NO_BORDER).setPadding(20).setTextAlignment(TextAlignment.CENTER);
+            emptyCell.add(new Paragraph("No contributions found for the selected criteria.")
+                    .setFont(regularFont).setFontSize(9).setFontColor(TEXT_MUTED));
+            emptyTable.addCell(emptyCell);
+            document.add(emptyTable);
+            return;
+        }
+
+        // Contributions table - columns: Month, Member, Type, Due Date, Amount Due, Amount Paid, Balance, Status
+        Table contribTable = new Table(UnitValue.createPercentArray(new float[]{0.9f, 1.4f, 1.1f, 0.9f, 0.9f, 0.9f, 0.9f, 0.8f}))
+                .setWidth(UnitValue.createPercentValue(100))
+                .setMarginLeft(30).setMarginRight(30);
+
+        // Header row
+        contribTable.addHeaderCell(createTableHeader("Month", boldFont));
+        contribTable.addHeaderCell(createTableHeader("Member", boldFont));
+        contribTable.addHeaderCell(createTableHeader("Type", boldFont));
+        contribTable.addHeaderCell(createTableHeader("Due Date", boldFont));
+        contribTable.addHeaderCell(createTableHeader("Due", boldFont).setTextAlignment(TextAlignment.RIGHT));
+        contribTable.addHeaderCell(createTableHeader("Paid", boldFont).setTextAlignment(TextAlignment.RIGHT));
+        contribTable.addHeaderCell(createTableHeader("Balance", boldFont).setTextAlignment(TextAlignment.RIGHT));
+        contribTable.addHeaderCell(createTableHeader("Status", boldFont).setTextAlignment(TextAlignment.CENTER));
+
+        // Data rows
+        for (int i = 0; i < contributions.size(); i++) {
+            ContributionReportItemDto c = contributions.get(i);
+            boolean isAltRow = i % 2 == 1;
+            addContributionRow(contribTable, c, regularFont, boldFont, isAltRow);
+        }
+
+        document.add(contribTable);
+    }
 
     private Cell createTableHeader(String text, PdfFont font) {
         return new Cell()
