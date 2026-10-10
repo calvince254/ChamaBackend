@@ -337,7 +337,7 @@ public class FinanceReportPdfService {
 
     private void addFooter(Document document, PdfFont font) {
         document.add(new Paragraph("\n"));
-        document.add(new Paragraph("Powered by Calpex Technologies • www.calpex.co.ke")
+        document.add(new Paragraph("Powered by Calpex Technologies • www.calpextechnologies.co.ke")
                 .setFont(font)
                 .setFontSize(8)
                 .setTextAlignment(TextAlignment.CENTER)

@@ -151,4 +151,66 @@ public interface ContributionRepository extends JpaRepository<Contribution, Long
             @Param("endDate") java.time.LocalDate endDate,
             @Param("memberId") Long memberId,
             @Param("contributionTypeId") Long contributionTypeId);
+    
+    // ==================== STATUS-BASED REPORT QUERIES ====================
+    
+    /**
+     * Find contributions with status filter and pagination.
+     * Used for the Reports tab to show all contributions including PENDING.
+     */
+    @Query("SELECT c FROM Contribution c WHERE c.tenant.id = :tenantId " +
+           "AND (:startDate IS NULL OR c.dueDate >= :startDate) " +
+           "AND (:endDate IS NULL OR c.dueDate <= :endDate) " +
+           "AND (:memberId IS NULL OR c.member.id = :memberId) " +
+           "AND (:contributionTypeId IS NULL OR c.contributionType.id = :contributionTypeId) " +
+           "AND (:status IS NULL OR c.status = :status) " +
+           "ORDER BY c.dueDate DESC, c.member.name ASC")
+    Page<Contribution> findForReportWithStatus(
+            @Param("tenantId") Long tenantId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate,
+            @Param("memberId") Long memberId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("status") Contribution.ContributionStatus status,
+            Pageable pageable);
+    
+    /**
+     * Find all contributions with status filter (no pagination, for PDF export).
+     */
+    @Query("SELECT c FROM Contribution c WHERE c.tenant.id = :tenantId " +
+           "AND (:startDate IS NULL OR c.dueDate >= :startDate) " +
+           "AND (:endDate IS NULL OR c.dueDate <= :endDate) " +
+           "AND (:memberId IS NULL OR c.member.id = :memberId) " +
+           "AND (:contributionTypeId IS NULL OR c.contributionType.id = :contributionTypeId) " +
+           "AND (:status IS NULL OR c.status = :status) " +
+           "ORDER BY c.dueDate DESC, c.member.name ASC")
+    List<Contribution> findAllForReportWithStatus(
+            @Param("tenantId") Long tenantId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate,
+            @Param("memberId") Long memberId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("status") Contribution.ContributionStatus status);
+    
+    /**
+     * Summary totals query for report with status filter.
+     */
+    @Query(value = "SELECT COALESCE(SUM(c.amount_due), 0) as total_due, " +
+           "COALESCE(SUM(c.amount_paid), 0) as total_paid, " +
+           "COUNT(c.id) as record_count " +
+           "FROM contributions c " +
+           "WHERE c.tenant_id = :tenantId " +
+           "AND (:startDate IS NULL OR c.due_date >= :startDate) " +
+           "AND (:endDate IS NULL OR c.due_date <= :endDate) " +
+           "AND (:memberId IS NULL OR c.member_id = :memberId) " +
+           "AND (:contributionTypeId IS NULL OR c.contribution_type_id = :contributionTypeId) " +
+           "AND (:status IS NULL OR c.status = :status)",
+           nativeQuery = true)
+    Object[] findReportSummaryWithStatusNative(
+            @Param("tenantId") Long tenantId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate,
+            @Param("memberId") Long memberId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("status") String status);
 }

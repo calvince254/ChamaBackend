@@ -36,4 +36,7 @@ public class ContributionTransactionDto {
     
     // For credits - contribution period
     private String month;  // e.g., "2026-09"
+    
+    // Contribution status (PENDING, PAID, PARTIAL, OVERDUE, DEFAULTED)
+    private String status;
 }

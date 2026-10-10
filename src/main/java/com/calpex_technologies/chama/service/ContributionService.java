@@ -1,6 +1,7 @@
 package com.calpex_technologies.chama.service;
 
 import com.calpex_technologies.chama.dto.ContributionDto;
+import com.calpex_technologies.chama.dto.ContributionReportItemDto;
 import com.calpex_technologies.chama.dto.ContributionTransactionDto;
 import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.entity.*;
@@ -724,97 +725,133 @@ public class ContributionService {
         return summary;
     }
     
-    // ==================== TRANSACTION-BASED REPORT METHODS ====================
+    // ==================== CONTRIBUTION-BASED REPORT METHODS ====================
     
     /**
-     * Get contribution transactions report with pagination.
-     * Shows both credits (contributions paid) and debits (welfare deductions) as separate rows.
-     * Supports optional contributionTypeId - if null, returns transactions for all contribution types.
+     * Get contributions report with pagination.
+     * Shows contributions directly (including PENDING ones that have no transactions yet).
+     * Supports optional contributionTypeId - if null, returns contributions for all types.
+     * Supports optional status filter - PENDING, PAID, PARTIAL, OVERDUE, DEFAULTED, or null for all.
      */
-    public PageResponse<ContributionTransactionDto> getContributionTransactionsReport(
+    public PageResponse<ContributionReportItemDto> getContributionsReportWithStatus(
             Long tenantId, Long contributionTypeId, Long memberId,
-            LocalDate startDate, LocalDate endDate, int page, int size) {
+            LocalDate startDate, LocalDate endDate, String status, int page, int size) {
         
         if (size <= 0) size = DEFAULT_PAGE_SIZE;
         Pageable pageable = PageRequest.of(page, size);
         
-        Page<Transaction> transactionPage = transactionRepository.findContributionTransactions(
-                tenantId, contributionTypeId, memberId, startDate, endDate, pageable);
+        // Convert status string to enum
+        Contribution.ContributionStatus statusEnum = parseContributionStatus(status);
         
-        Page<ContributionTransactionDto> dtoPage = transactionPage.map(this::toTransactionDto);
+        Page<Contribution> contributionPage = contributionRepository.findForReportWithStatus(
+                tenantId, startDate, endDate, memberId, contributionTypeId, statusEnum, pageable);
+        
+        Page<ContributionReportItemDto> dtoPage = contributionPage.map(this::toReportItemDto);
         return PageResponse.from(dtoPage);
     }
     
     /**
-     * Get all contribution transactions for PDF export (no pagination).
-     * Supports optional contributionTypeId - if null, returns transactions for all contribution types.
+     * Get all contributions for PDF export (no pagination).
+     * Shows contributions directly (including PENDING ones that have no transactions yet).
+     * Supports optional contributionTypeId - if null, returns contributions for all types.
+     * Supports optional status filter - PENDING, PAID, PARTIAL, OVERDUE, DEFAULTED, or null for all.
      */
-    public List<ContributionTransactionDto> getAllContributionTransactionsForReport(
+    public List<ContributionReportItemDto> getAllContributionsForReportWithStatus(
             Long tenantId, Long contributionTypeId, Long memberId,
-            LocalDate startDate, LocalDate endDate) {
+            LocalDate startDate, LocalDate endDate, String status) {
         
-        List<Transaction> transactions = transactionRepository.findAllContributionTransactions(
-                tenantId, contributionTypeId, memberId, startDate, endDate);
+        // Convert status string to enum
+        Contribution.ContributionStatus statusEnum = parseContributionStatus(status);
         
-        return transactions.stream().map(this::toTransactionDto).collect(Collectors.toList());
+        List<Contribution> contributions = contributionRepository.findAllForReportWithStatus(
+                tenantId, startDate, endDate, memberId, contributionTypeId, statusEnum);
+        
+        return contributions.stream().map(this::toReportItemDto).collect(Collectors.toList());
     }
     
     /**
-     * Get contribution transactions report summary.
-     * Returns totalCredits, totalDebits, and balance.
-     * Supports optional contributionTypeId - if null, returns summary for all contribution types.
+     * Get contributions report summary.
+     * Returns totalDue, totalPaid, balance, and count.
+     * Supports optional contributionTypeId - if null, returns summary for all types.
+     * Supports optional status filter - PENDING, PAID, PARTIAL, OVERDUE, DEFAULTED, or null for all.
      */
-    public Map<String, Object> getContributionTransactionsSummary(
+    public Map<String, Object> getContributionsReportSummaryWithStatus(
             Long tenantId, Long contributionTypeId, Long memberId,
-            LocalDate startDate, LocalDate endDate) {
+            LocalDate startDate, LocalDate endDate, String status) {
         
-        BigDecimal totalCredits = transactionRepository.sumContributionCredits(
-                tenantId, contributionTypeId, memberId, startDate, endDate);
-        BigDecimal totalDebits = transactionRepository.sumContributionDebits(
-                tenantId, contributionTypeId, memberId, startDate, endDate);
-        Long count = transactionRepository.countContributionTransactions(
-                tenantId, contributionTypeId, memberId, startDate, endDate);
+        // Convert status string for native query (or null)
+        String statusStr = (status == null || status.isEmpty() || "ALL".equalsIgnoreCase(status)) 
+                ? null : status.toUpperCase();
         
-        BigDecimal balance = totalCredits.subtract(totalDebits);
+        Object[] result = contributionRepository.findReportSummaryWithStatusNative(
+                tenantId, startDate, endDate, memberId, contributionTypeId, statusStr);
+        
+        BigDecimal totalDue = BigDecimal.ZERO;
+        BigDecimal totalPaid = BigDecimal.ZERO;
+        long count = 0;
+        
+        if (result != null && result.length > 0 && result[0] != null) {
+            Object[] row = (result[0] instanceof Object[]) ? (Object[]) result[0] : result;
+            if (row.length >= 3) {
+                if (row[0] != null) {
+                    totalDue = new BigDecimal(row[0].toString());
+                }
+                if (row[1] != null) {
+                    totalPaid = new BigDecimal(row[1].toString());
+                }
+                if (row[2] != null) {
+                    count = ((Number) row[2]).longValue();
+                }
+            }
+        }
         
         Map<String, Object> summary = new java.util.HashMap<>();
-        summary.put("totalCredits", totalCredits);
-        summary.put("totalDebits", totalDebits);
-        summary.put("balance", balance);
+        summary.put("totalDue", totalDue);
+        summary.put("totalPaid", totalPaid);
+        summary.put("balance", totalDue.subtract(totalPaid));
         summary.put("count", count);
         
         return summary;
     }
     
     /**
-     * Convert Transaction entity to ContributionTransactionDto.
+     * Parse status string to ContributionStatus enum.
+     * Returns null if status is null, empty, or "ALL".
      */
-    private ContributionTransactionDto toTransactionDto(Transaction transaction) {
-        ContributionTransactionDto.ContributionTransactionDtoBuilder builder = ContributionTransactionDto.builder()
-                .id(transaction.getId())
-                .date(transaction.getDate().toString())
-                .amount(transaction.getAmount())
-                .description(transaction.getDescription())
-                .transactionType(transaction.getType().name())
-                .direction(transaction.getDirection() == Transaction.TransactionDirection.IN ? "CREDIT" : "DEBIT")
-                .referenceId(transaction.getReferenceId())
-                .referenceType(transaction.getReferenceType());
-        
-        if (transaction.getMember() != null) {
-            builder.memberId(transaction.getMember().getId())
-                   .memberName(transaction.getMember().getName())
-                   .memberNo(transaction.getMember().getMemberNo());
+    private Contribution.ContributionStatus parseContributionStatus(String status) {
+        if (status == null || status.isEmpty() || "ALL".equalsIgnoreCase(status)) {
+            return null;
         }
-        
-        if (transaction.getContributionType() != null) {
-            builder.contributionTypeId(transaction.getContributionType().getId())
-                   .contributionTypeName(transaction.getContributionType().getName());
+        try {
+            return Contribution.ContributionStatus.valueOf(status.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return null;
         }
+    }
+    
+    /**
+     * Convert Contribution entity to ContributionReportItemDto.
+     */
+    private ContributionReportItemDto toReportItemDto(Contribution contribution) {
+        BigDecimal amountDue = contribution.getAmountDue() != null ? contribution.getAmountDue() : BigDecimal.ZERO;
+        BigDecimal amountPaid = contribution.getAmountPaid() != null ? contribution.getAmountPaid() : BigDecimal.ZERO;
         
-        // Extract month from reference if it's a contribution
-        if ("CONTRIBUTION".equals(transaction.getReferenceType()) && transaction.getReferenceId() != null) {
-            contributionRepository.findById(transaction.getReferenceId())
-                    .ifPresent(c -> builder.month(c.getMonth().toString()));
+        ContributionReportItemDto.ContributionReportItemDtoBuilder builder = ContributionReportItemDto.builder()
+                .id(contribution.getId())
+                .memberId(contribution.getMember().getId())
+                .memberName(contribution.getMember().getName())
+                .memberNo(contribution.getMember().getMemberNo())
+                .month(contribution.getMonth().toString())
+                .dueDate(contribution.getDueDate() != null ? contribution.getDueDate().toString() : null)
+                .paidOn(contribution.getPaidOn() != null ? contribution.getPaidOn().toString() : null)
+                .amountDue(amountDue)
+                .amountPaid(amountPaid)
+                .balance(amountDue.subtract(amountPaid))
+                .status(contribution.getStatus() != null ? contribution.getStatus().name() : "PENDING");
+        
+        if (contribution.getContributionType() != null) {
+            builder.contributionTypeId(contribution.getContributionType().getId())
+                   .contributionTypeName(contribution.getContributionType().getName());
         }
         
         return builder.build();

@@ -1,5 +1,6 @@
 package com.calpex_technologies.chama.repository;
 
+import com.calpex_technologies.chama.entity.Contribution;
 import com.calpex_technologies.chama.entity.Tenant;
 import com.calpex_technologies.chama.entity.Transaction;
 import org.springframework.data.domain.Page;
@@ -250,6 +251,114 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             @Param("memberId") Long memberId,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
+    
+    // ==================== CONTRIBUTION REPORT QUERIES WITH STATUS FILTER ====================
+    
+    /**
+     * Get contribution transactions filtered by contribution status with pagination.
+     * Joins with Contribution table to filter by status.
+     */
+    @Query("SELECT t FROM Transaction t " +
+           "JOIN Contribution c ON c.id = t.referenceId AND t.referenceType = 'CONTRIBUTION' " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate) " +
+           "AND (:status IS NULL OR c.status = :status) " +
+           "ORDER BY t.date DESC, t.id DESC")
+    Page<Transaction> findContributionTransactionsWithStatus(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("status") Contribution.ContributionStatus status,
+            Pageable pageable);
+    
+    /**
+     * Get all contribution transactions filtered by status (for PDF export).
+     */
+    @Query("SELECT t FROM Transaction t " +
+           "JOIN Contribution c ON c.id = t.referenceId AND t.referenceType = 'CONTRIBUTION' " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate) " +
+           "AND (:status IS NULL OR c.status = :status) " +
+           "ORDER BY t.date DESC, t.id DESC")
+    List<Transaction> findAllContributionTransactionsWithStatus(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("status") Contribution.ContributionStatus status);
+    
+    /**
+     * Sum credits with status filter.
+     */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
+           "JOIN Contribution c ON c.id = t.referenceId AND t.referenceType = 'CONTRIBUTION' " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND t.direction = 'IN' " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate) " +
+           "AND (:status IS NULL OR c.status = :status)")
+    BigDecimal sumContributionCreditsWithStatus(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("status") Contribution.ContributionStatus status);
+    
+    /**
+     * Sum debits with status filter.
+     */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t " +
+           "JOIN Contribution c ON c.id = t.referenceId AND t.referenceType = 'CONTRIBUTION' " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND t.direction = 'OUT' " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate) " +
+           "AND (:status IS NULL OR c.status = :status)")
+    BigDecimal sumContributionDebitsWithStatus(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("status") Contribution.ContributionStatus status);
+    
+    /**
+     * Count transactions with status filter.
+     */
+    @Query("SELECT COUNT(t) FROM Transaction t " +
+           "JOIN Contribution c ON c.id = t.referenceId AND t.referenceType = 'CONTRIBUTION' " +
+           "WHERE t.tenant.id = :tenantId " +
+           "AND t.contributionType IS NOT NULL " +
+           "AND (:contributionTypeId IS NULL OR t.contributionType.id = :contributionTypeId) " +
+           "AND (:memberId IS NULL OR t.member.id = :memberId) " +
+           "AND (:startDate IS NULL OR t.date >= :startDate) " +
+           "AND (:endDate IS NULL OR t.date <= :endDate) " +
+           "AND (:status IS NULL OR c.status = :status)")
+    Long countContributionTransactionsWithStatus(
+            @Param("tenantId") Long tenantId,
+            @Param("contributionTypeId") Long contributionTypeId,
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("status") Contribution.ContributionStatus status);
     
     /**
      * Find transactions by tenant, reference type, and reference ID.

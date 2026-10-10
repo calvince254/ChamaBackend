@@ -1,7 +1,7 @@
 package com.calpex_technologies.chama.controller;
 
 import com.calpex_technologies.chama.dto.ContributionDto;
-import com.calpex_technologies.chama.dto.ContributionTransactionDto;
+import com.calpex_technologies.chama.dto.ContributionReportItemDto;
 import com.calpex_technologies.chama.dto.GenerateContributionsRequest;
 import com.calpex_technologies.chama.dto.PageResponse;
 import com.calpex_technologies.chama.dto.RecordPaymentRequest;
@@ -9,6 +9,7 @@ import com.calpex_technologies.chama.scheduler.ContributionScheduler;
 import com.calpex_technologies.chama.security.UserPrincipal;
 import com.calpex_technologies.chama.service.ContributionReportPdfService;
 import com.calpex_technologies.chama.service.ContributionService;
+import com.calpex_technologies.chama.service.ContributionTransactionsPdfService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -31,6 +32,7 @@ public class ContributionController {
     private final ContributionService contributionService;
     private final ContributionScheduler contributionScheduler;
     private final ContributionReportPdfService contributionReportPdfService;
+    private final ContributionTransactionsPdfService contributionTransactionsPdfService;
 
     // ==================== REPORT ENDPOINTS ====================
     
@@ -113,20 +115,22 @@ public class ContributionController {
                 .body(pdfContent);
     }
     
-    // ==================== TRANSACTION-BASED REPORT ENDPOINTS ====================
+    // ==================== CONTRIBUTION-BASED REPORT ENDPOINTS ====================
     
     /**
-     * Get contribution transactions report with pagination.
-     * Shows both credits (contributions paid) and debits (welfare deductions) as separate rows.
+     * Get contributions report with pagination.
+     * Shows contributions directly (including PENDING ones).
      * Supports optional contributionTypeId for "All Types" filter.
+     * Supports optional status filter: PENDING, PAID, PARTIAL, OVERDUE, DEFAULTED, or ALL (default).
      */
     @GetMapping("/reports/transactions")
     @PreAuthorize("hasAnyAuthority('FULL_ACCESS', 'VIEW_CONTRIBUTION_REPORTS')")
-    public ResponseEntity<PageResponse<ContributionTransactionDto>> getContributionTransactionsReport(
+    public ResponseEntity<PageResponse<ContributionReportItemDto>> getContributionsReport(
             @RequestParam(required = false) Long contributionTypeId,
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,
             @RequestParam(required = false) Long memberId,
+            @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size,
             @AuthenticationPrincipal UserPrincipal principal) {
@@ -134,31 +138,71 @@ public class ContributionController {
         LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
         LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
         
-        PageResponse<ContributionTransactionDto> response = contributionService.getContributionTransactionsReport(
-                principal.getTenantId(), contributionTypeId, memberId, start, end, page, size);
+        PageResponse<ContributionReportItemDto> response = contributionService.getContributionsReportWithStatus(
+                principal.getTenantId(), contributionTypeId, memberId, start, end, status, page, size);
         return ResponseEntity.ok(response);
     }
     
     /**
-     * Get contribution transactions report summary.
-     * Returns totalCredits, totalDebits, and balance.
+     * Get contributions report summary.
+     * Returns totalDue, totalPaid, balance, and count.
      * Supports optional contributionTypeId for "All Types" filter.
+     * Supports optional status filter: PENDING, PAID, PARTIAL, OVERDUE, DEFAULTED, or ALL (default).
      */
     @GetMapping("/reports/transactions/summary")
     @PreAuthorize("hasAnyAuthority('FULL_ACCESS', 'VIEW_CONTRIBUTION_REPORTS')")
-    public ResponseEntity<Map<String, Object>> getContributionTransactionsSummary(
+    public ResponseEntity<Map<String, Object>> getContributionsReportSummary(
             @RequestParam(required = false) Long contributionTypeId,
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,
             @RequestParam(required = false) Long memberId,
+            @RequestParam(required = false) String status,
             @AuthenticationPrincipal UserPrincipal principal) {
         
         LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
         LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
         
-        Map<String, Object> summary = contributionService.getContributionTransactionsSummary(
-                principal.getTenantId(), contributionTypeId, memberId, start, end);
+        Map<String, Object> summary = contributionService.getContributionsReportSummaryWithStatus(
+                principal.getTenantId(), contributionTypeId, memberId, start, end, status);
         return ResponseEntity.ok(summary);
+    }
+
+    /**
+     * Download contributions report as PDF.
+     * Uses the same filters as the UI report.
+     * Supports optional status filter: PENDING, PAID, PARTIAL, OVERDUE, DEFAULTED, or ALL (default).
+     */
+    @GetMapping("/reports/transactions/pdf")
+    @PreAuthorize("hasAnyAuthority('FULL_ACCESS', 'DOWNLOAD_CONTRIBUTION_REPORT')")
+    public ResponseEntity<byte[]> downloadContributionsReport(
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) Long memberId,
+            @RequestParam(required = false) Long contributionTypeId,
+            @RequestParam(required = false) String status,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        
+        LocalDate start = startDate != null ? LocalDate.parse(startDate) : null;
+        LocalDate end = endDate != null ? LocalDate.parse(endDate) : null;
+        
+        byte[] pdfContent = contributionTransactionsPdfService.generateContributionsReportPdf(
+                principal.getTenantId(), start, end, memberId, contributionTypeId, status);
+        
+        // Generate filename
+        String filename = "Contributions_Report";
+        if (start != null && end != null) {
+            filename += "_" + start + "_to_" + end;
+        } else if (start != null) {
+            filename += "_from_" + start;
+        } else if (end != null) {
+            filename += "_until_" + end;
+        }
+        filename += ".pdf";
+        
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .body(pdfContent);
     }
 
     // ==================== EXISTING ENDPOINTS ====================
